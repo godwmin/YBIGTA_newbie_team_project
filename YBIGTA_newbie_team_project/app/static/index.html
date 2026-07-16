@@ -1,43 +1,332 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="ko">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>User Management</title>
+    <title>YBIGTA User Management</title>
     <style>
-        body {
-            font-family: Arial, sans-serif;
-            margin: 20px;
-            text-align: center;
+        :root {
+            --primary: #625bf6;
+            --primary-dark: #4942d7;
+            --secondary: #12b8a6;
+            --secondary-dark: #079486;
+            --text: #20233a;
+            --muted: #777b91;
+            --surface: rgba(255, 255, 255, 0.92);
+            --line: rgba(105, 104, 155, 0.16);
         }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            min-height: 100vh;
+            margin: 0;
+            padding: 56px 20px;
+            overflow-x: hidden;
+            font-family: "Pretendard", "SUIT", "Apple SD Gothic Neo", -apple-system,
+                BlinkMacSystemFont, "Segoe UI", sans-serif;
+            color: var(--text);
+            text-align: center;
+            background:
+                radial-gradient(circle at 15% 15%, rgba(98, 91, 246, 0.22), transparent 30%),
+                radial-gradient(circle at 85% 80%, rgba(18, 184, 166, 0.2), transparent 28%),
+                linear-gradient(135deg, #f7f7ff 0%, #eef2ff 48%, #edfafa 100%);
+        }
+
+        body::before,
+        body::after {
+            content: "";
+            position: fixed;
+            z-index: -1;
+            border-radius: 50%;
+            filter: blur(8px);
+            opacity: 0.8;
+        }
+
+        body::before {
+            top: -110px;
+            right: -70px;
+            width: 280px;
+            height: 280px;
+            background: linear-gradient(145deg, rgba(132, 126, 255, 0.35), rgba(255, 255, 255, 0));
+        }
+
+        body::after {
+            bottom: -130px;
+            left: -80px;
+            width: 320px;
+            height: 320px;
+            background: linear-gradient(145deg, rgba(74, 222, 200, 0.3), rgba(255, 255, 255, 0));
+        }
+
         .container {
             max-width: 600px;
             margin: 0 auto;
-            border: 1px solid #ccc;
-            border-radius: 8px;
-            padding: 20px;
-            box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+            padding: 38px;
+            border: 1px solid rgba(255, 255, 255, 0.75);
+            border-radius: 28px;
+            background: var(--surface);
+            box-shadow:
+                0 24px 60px rgba(61, 58, 116, 0.15),
+                inset 0 1px 0 rgba(255, 255, 255, 0.8);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
         }
+
         h1 {
-            color: #333;
+            margin: 0 0 28px;
+            font-size: clamp(28px, 5vw, 38px);
+            font-weight: 800;
+            letter-spacing: -1.4px;
+            color: var(--text);
         }
+
+        h1::after {
+            content: "";
+            display: block;
+            width: 42px;
+            height: 4px;
+            margin: 14px auto 0;
+            border-radius: 999px;
+            background: linear-gradient(90deg, var(--primary), var(--secondary));
+        }
+
+        h2 {
+            margin: 0 0 18px;
+            font-size: 21px;
+            font-weight: 750;
+            letter-spacing: -0.5px;
+        }
+
         form {
-            margin: 20px 0;
+            margin: 0;
         }
+
+        .field-group {
+            margin-bottom: 14px;
+            text-align: left;
+        }
+
+        .field-group label {
+            display: block;
+            margin: 0 0 7px 2px;
+            color: #4c5067;
+            font-size: 14px;
+            font-weight: 700;
+            letter-spacing: -0.2px;
+        }
+
+        .input-wrapper {
+            position: relative;
+        }
+
+        .input-icon {
+            position: absolute;
+            top: 50%;
+            left: 15px;
+            width: 19px;
+            height: 19px;
+            color: #999caf;
+            pointer-events: none;
+            transform: translateY(-50%);
+            transition: color 0.2s ease;
+        }
+
+        .input-icon svg {
+            display: block;
+            width: 100%;
+            height: 100%;
+            fill: none;
+            stroke: currentColor;
+            stroke-linecap: round;
+            stroke-linejoin: round;
+            stroke-width: 1.8;
+        }
+
         input {
-            padding: 10px;
-            margin: 5px 0;
-            width: 80%;
-            font-size: 16px;
+            width: 100%;
+            margin: 0;
+            padding: 14px 48px 14px 46px;
+            border: 1px solid var(--line);
+            border-radius: 13px;
+            outline: none;
+            background: rgba(250, 250, 255, 0.9);
+            color: var(--text);
+            font: inherit;
+            font-size: 15px;
+            transition: border-color 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
         }
+
+        input::placeholder {
+            color: #a1a4b5;
+        }
+
+        input:focus {
+            border-color: rgba(98, 91, 246, 0.65);
+            background: #ffffff;
+            box-shadow: 0 0 0 4px rgba(98, 91, 246, 0.11);
+        }
+
+        .input-wrapper:focus-within .input-icon {
+            color: var(--primary);
+        }
+
         button {
-            padding: 10px 20px;
-            margin: 10px;
+            width: 100%;
+            margin: 14px 0 0;
+            padding: 14px 20px;
+            border: 0;
+            border-radius: 13px;
+            color: #ffffff;
+            font: inherit;
             font-size: 16px;
+            font-weight: 750;
+            letter-spacing: -0.2px;
             cursor: pointer;
+            background: linear-gradient(135deg, #7771ff, var(--primary-dark));
+            box-shadow: 0 8px 18px rgba(73, 66, 215, 0.24);
+            transition: transform 0.18s ease, box-shadow 0.18s ease, filter 0.18s ease;
         }
+
+        button:hover {
+            transform: translateY(-2px);
+            filter: brightness(1.04);
+        }
+
+        button:active {
+            transform: translateY(1px);
+            box-shadow: 0 3px 7px rgba(61, 58, 116, 0.2);
+        }
+
+        button:focus-visible {
+            outline: 3px solid rgba(98, 91, 246, 0.24);
+            outline-offset: 3px;
+        }
+
+        button:disabled {
+            cursor: wait;
+            filter: saturate(0.75);
+            opacity: 0.78;
+        }
+
+        button.is-loading {
+            pointer-events: none;
+        }
+
+        button.is-loading::before {
+            content: "";
+            display: inline-block;
+            width: 15px;
+            height: 15px;
+            margin-right: 9px;
+            border: 2px solid rgba(255, 255, 255, 0.45);
+            border-top-color: #ffffff;
+            border-radius: 50%;
+            vertical-align: -2px;
+            animation: spin 0.7s linear infinite;
+        }
+
+        .password-toggle {
+            position: absolute;
+            top: 50%;
+            right: 12px;
+            width: auto;
+            margin: 0;
+            padding: 6px 7px;
+            border-radius: 8px;
+            background: transparent;
+            box-shadow: none;
+            color: var(--muted);
+            font-size: 13px;
+            font-weight: 700;
+            line-height: 1;
+            transform: translateY(-50%);
+        }
+
+        .password-toggle:hover {
+            background: rgba(98, 91, 246, 0.08);
+            box-shadow: none;
+            color: var(--primary-dark);
+            filter: none;
+            transform: translateY(-50%);
+        }
+
+        .password-toggle:active {
+            background: rgba(98, 91, 246, 0.14);
+            box-shadow: none;
+            transform: translateY(-50%);
+        }
+
+        .password-toggle:disabled {
+            cursor: pointer;
+            opacity: 1;
+        }
+
+        .login-button {
+            background: linear-gradient(135deg, #7771ff, var(--primary-dark));
+            box-shadow:
+                0 9px 0 #3731ad,
+                0 14px 24px rgba(73, 66, 215, 0.28);
+        }
+
+        .login-button:hover {
+            box-shadow:
+                0 10px 0 #3731ad,
+                0 17px 28px rgba(73, 66, 215, 0.32);
+        }
+
+        .register-button {
+            background: linear-gradient(135deg, #27cdbb, var(--secondary-dark));
+            box-shadow:
+                0 9px 0 #067367,
+                0 14px 24px rgba(7, 148, 134, 0.24);
+        }
+
+        .register-button:hover {
+            box-shadow:
+                0 10px 0 #067367,
+                0 17px 28px rgba(7, 148, 134, 0.28);
+        }
+
+        #delete-section button {
+            background: linear-gradient(135deg, #f16c78, #d83f50);
+            box-shadow: 0 8px 18px rgba(216, 63, 80, 0.22);
+        }
+
+        @keyframes spin {
+            to {
+                transform: rotate(360deg);
+            }
+        }
+
         .section {
-            margin-bottom: 30px;
+            margin-bottom: 22px;
+            padding: 26px;
+            border: 1px solid var(--line);
+            border-radius: 20px;
+            background: rgba(255, 255, 255, 0.68);
+            box-shadow: 0 10px 28px rgba(61, 58, 116, 0.07);
+        }
+
+        .section:last-child {
+            margin-bottom: 0;
+        }
+
+        @media (max-width: 640px) {
+            body {
+                padding: 28px 14px;
+            }
+
+            .container {
+                padding: 24px 18px;
+                border-radius: 22px;
+            }
+
+            .section {
+                padding: 20px 16px;
+            }
         }
     </style>
 </head>
@@ -47,18 +336,60 @@
         <div class="section" id="login-section">
             <h2>Login</h2>
             <form id="login-form">
-                <input type="email" id="login-email" placeholder="Email" required><br>
-                <input type="password" id="login-password" placeholder="Password" required><br>
-                <button type="button" onclick="loginUser()">Login</button>
+                <div class="field-group">
+                    <label for="login-email">Email</label>
+                    <div class="input-wrapper">
+                        <span class="input-icon" aria-hidden="true">
+                            <svg viewBox="0 0 24 24"><path d="M4 6h16v12H4z"/><path d="m4 7 8 6 8-6"/></svg>
+                        </span>
+                        <input type="email" id="login-email" placeholder="example@email.com" autocomplete="email" required>
+                    </div>
+                </div>
+                <div class="field-group">
+                    <label for="login-password">Password</label>
+                    <div class="input-wrapper">
+                        <span class="input-icon" aria-hidden="true">
+                            <svg viewBox="0 0 24 24"><rect x="5" y="10" width="14" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>
+                        </span>
+                        <input type="password" id="login-password" placeholder="Enter your password" autocomplete="current-password" required>
+                        <button class="password-toggle" type="button" aria-label="Show password" onclick="togglePassword('login-password', this)">Show</button>
+                    </div>
+                </div>
+                <button class="login-button" type="button" onclick="loginUser()">Login</button>
             </form>
         </div>
         <div class="section" id="register-section">
             <h2>Register</h2>
             <form id="register-form">
-                <input type="email" id="register-email" placeholder="Email" required><br>
-                <input type="password" id="register-password" placeholder="Password" required><br>
-                <input type="text" id="register-username" placeholder="Username" required><br>
-                <button type="button" onclick="registerUser()">Register</button>
+                <div class="field-group">
+                    <label for="register-email">Email</label>
+                    <div class="input-wrapper">
+                        <span class="input-icon" aria-hidden="true">
+                            <svg viewBox="0 0 24 24"><path d="M4 6h16v12H4z"/><path d="m4 7 8 6 8-6"/></svg>
+                        </span>
+                        <input type="email" id="register-email" placeholder="example@email.com" autocomplete="email" required>
+                    </div>
+                </div>
+                <div class="field-group">
+                    <label for="register-password">Password</label>
+                    <div class="input-wrapper">
+                        <span class="input-icon" aria-hidden="true">
+                            <svg viewBox="0 0 24 24"><rect x="5" y="10" width="14" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>
+                        </span>
+                        <input type="password" id="register-password" placeholder="Create a password" autocomplete="new-password" required>
+                        <button class="password-toggle" type="button" aria-label="Show password" onclick="togglePassword('register-password', this)">Show</button>
+                    </div>
+                </div>
+                <div class="field-group">
+                    <label for="register-username">Username</label>
+                    <div class="input-wrapper">
+                        <span class="input-icon" aria-hidden="true">
+                            <svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg>
+                        </span>
+                        <input type="text" id="register-username" placeholder="Choose a username" autocomplete="username" required>
+                    </div>
+                </div>
+                <button class="register-button" type="button" onclick="registerUser()">Register</button>
             </form>
         </div>
     </div>
@@ -68,7 +399,16 @@
         <div class="section" id="update-password-section">
             <h2>Update Password</h2>
             <form id="update-password-form">
-                <input type="password" id="update-password" placeholder="New Password" required><br>
+                <div class="field-group">
+                    <label for="update-password">New Password</label>
+                    <div class="input-wrapper">
+                        <span class="input-icon" aria-hidden="true">
+                            <svg viewBox="0 0 24 24"><rect x="5" y="10" width="14" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>
+                        </span>
+                        <input type="password" id="update-password" placeholder="Enter a new password" autocomplete="new-password" required>
+                        <button class="password-toggle" type="button" aria-label="Show password" onclick="togglePassword('update-password', this)">Show</button>
+                    </div>
+                </div>
                 <button type="button" onclick="updatePassword()">Update Password</button>
             </form>
         </div>
@@ -82,9 +422,46 @@
     <script>
         let userEmail = null;
 
+        function togglePassword(inputId, button) {
+            const input = document.getElementById(inputId);
+            const isHidden = input.type === 'password';
+
+            input.type = isHidden ? 'text' : 'password';
+            button.textContent = isHidden ? 'Hide' : 'Show';
+            button.setAttribute('aria-label', isHidden ? 'Hide password' : 'Show password');
+        }
+
+        function setButtonLoading(button, isLoading, loadingText) {
+            if (isLoading) {
+                button.dataset.originalText = button.textContent;
+                button.textContent = loadingText;
+                button.classList.add('is-loading');
+                button.disabled = true;
+                return;
+            }
+
+            button.textContent = button.dataset.originalText;
+            button.classList.remove('is-loading');
+            button.disabled = false;
+        }
+
+        function resetRegisterForm() {
+            const form = document.getElementById('register-form');
+            const passwordInput = document.getElementById('register-password');
+            const passwordToggle = form.querySelector('.password-toggle');
+
+            form.reset();
+            passwordInput.type = 'password';
+            passwordToggle.textContent = 'Show';
+            passwordToggle.setAttribute('aria-label', 'Show password');
+        }
+
         function loginUser() {
             const email = document.getElementById('login-email').value;
             const password = document.getElementById('login-password').value;
+            const button = document.querySelector('.login-button');
+
+            setButtonLoading(button, true, 'Logging in...');
 
             fetch('/api/user/login', {
                 method: 'POST',
@@ -101,17 +478,21 @@
             })
             .then(data => {
                 userEmail = email; // 로그인 성공 시 이메일 저장
-                document.getElementById('username').textContent = `Hello, ${data.username}!`; // 사용자 이름 표시
+                document.getElementById('username').textContent = data.data.username; // BaseResponse의 data 안에 있는 사용자 이름 표시
                 document.getElementById('login-screen').style.display = 'none';
                 document.getElementById('logged-in-screen').style.display = 'block';
             })
-            .catch(error => alert(`Login failed: ${error.message}`));
+            .catch(error => alert(`Login failed: ${error.message}`))
+            .finally(() => setButtonLoading(button, false));
         }
 
         function registerUser() {
             const email = document.getElementById('register-email').value;
             const password = document.getElementById('register-password').value;
             const username = document.getElementById('register-username').value;
+            const button = document.querySelector('.register-button');
+
+            setButtonLoading(button, true, 'Creating account...');
 
             fetch('/api/user/register', {
                 method: 'POST',
@@ -126,12 +507,19 @@
                 }
                 return response.json();
             })
-            .then(() => alert(`Registration successful! Welcome, ${username}.`)) // 성공 메시지에 사용자 이름 표시
-            .catch(error => alert(`Registration failed: ${error.message}`));
+            .then(() => {
+                alert(`Registration successful! Welcome, ${username}.`);
+                resetRegisterForm();
+            })
+            .catch(error => alert(`Registration failed: ${error.message}`))
+            .finally(() => setButtonLoading(button, false));
         }
 
         function updatePassword() {
             const newPassword = document.getElementById('update-password').value;
+            const button = document.querySelector('#update-password-form > button');
+
+            setButtonLoading(button, true, 'Updating...');
 
             fetch('/api/user/update-password', {
                 method: 'PUT',
@@ -147,7 +535,8 @@
                 return response.json();
             })
             .then(() => alert(`Password successfully updated!`)) // 성공 메시지
-            .catch(error => alert(`Password update failed: ${error.message}`));
+            .catch(error => alert(`Password update failed: ${error.message}`))
+            .finally(() => setButtonLoading(button, false));
         }
 
         function deleteUser() {
@@ -155,6 +544,9 @@
                 alert("No user is logged in.");
                 return;
             }
+
+            const button = document.querySelector('#delete-section > button');
+            setButtonLoading(button, true, 'Deleting...');
 
             fetch('/api/user/delete', {
                 method: 'DELETE',
@@ -175,7 +567,8 @@
                 document.getElementById('login-screen').style.display = 'block';
                 userEmail = null; // 이메일 초기화
             })
-            .catch(error => alert(`Account deletion failed: ${error.message}`));
+            .catch(error => alert(`Account deletion failed: ${error.message}`))
+            .finally(() => setButtonLoading(button, false));
         }
     </script>
 </body>
