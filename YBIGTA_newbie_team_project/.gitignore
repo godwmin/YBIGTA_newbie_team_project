@@ -1,0 +1,16 @@
+__pycache__/
+*.py[cod]
+.DS_Store
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.venv/
+venv/
+*.log
+__MACOSX/
+.watcha_profile/
+
+# 로컬에서 검토용으로 내려받은 과제 명세
+*.pdf

@@ -201,18 +201,26 @@ class WatchaCrawler(BaseCrawler):
             code = c.get("code") or c.get("id")
             if not code or code in self._seen:
                 continue
+
+            rating = self._extract_rating(c)
+            created_at = c.get("created_at")
+            text = (c.get("text") or "").replace("\r", " ").replace("\n", " ").strip()
+            # 과제 최소 조건인 별점·날짜·본문을 모두 가진 리뷰만 수집한다.
+            if rating is None or not created_at or not text:
+                continue
+
             self._seen.add(code)
             self.reviews.append(
                 {
                     "id": code,
                     "user": (c.get("user") or {}).get("name"),
-                    "rating": self._extract_rating(c),
-                    "created_at": c.get("created_at"),
+                    "rating": rating,
+                    "created_at": created_at,
                     "watched_at": c.get("watched_at"),
                     "likes": c.get("likes_count"),
                     "replies": c.get("replies_count"),
                     "spoiler": c.get("spoiler"),
-                    "text": (c.get("text") or "").replace("\r", " ").replace("\n", " ").strip(),
+                    "text": text,
                 }
             )
             added += 1
@@ -252,6 +260,11 @@ class WatchaCrawler(BaseCrawler):
 
     def save_to_database(self) -> None:
         """수집한 코멘트를 `reviews_watcha.csv` 로 저장한다."""
+        if len(self.reviews) < 500:
+            raise RuntimeError(
+                f"유효한 왓챠 리뷰가 {len(self.reviews)}개입니다. "
+                "별점·날짜·본문이 있는 리뷰가 최소 500개 필요합니다."
+            )
         os.makedirs(self.output_dir, exist_ok=True)
         path = self._output_path()
         self._write_csv(path)
@@ -263,6 +276,10 @@ class WatchaCrawler(BaseCrawler):
         os.makedirs(self.output_dir, exist_ok=True)
         fields = ["id", "user", "rating", "created_at", "watched_at", "likes", "replies", "spoiler", "text"]
         with open(path, "w", newline="", encoding="utf-8-sig") as f:
-            writer = csv.DictWriter(f, fieldnames=fields)
+            writer = csv.DictWriter(
+                f,
+                fieldnames=fields,
+                lineterminator="\n",
+            )
             writer.writeheader()
             writer.writerows(self.reviews)

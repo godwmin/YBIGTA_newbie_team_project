@@ -1,8 +1,11 @@
 import os
 import time
+from typing import Optional
+
 import pandas as pd
 from bs4 import BeautifulSoup
 from selenium import webdriver
+from selenium.webdriver.chrome.webdriver import WebDriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.service import Service
 from webdriver_manager.chrome import ChromeDriverManager
@@ -21,12 +24,12 @@ class MegaboxCrawler(BaseCrawler):
             movie_no (str): 메가박스 영화 고유 번호 (기본값: 토이 스토리 5)
             max_pages (int): 수집할 최대 페이지 수 (55페이지 -> 약 550개)
         """
-        self.output_dir = output_dir
+        super().__init__(output_dir)
         self.movie_no = movie_no
         self.max_pages = max_pages
         self.url = f"https://www.megabox.co.kr/movie-detail/comment?rpstMovieNo={self.movie_no}"
         self.reviews_df = pd.DataFrame()
-        self.driver = None
+        self.driver: Optional[WebDriver] = None
 
     def start_browser(self) -> None:
         """BaseCrawler의 추상 메서드 구현: 셀레니움 브라우저를 시작합니다."""
@@ -45,6 +48,7 @@ class MegaboxCrawler(BaseCrawler):
         """BaseCrawler의 추상 메서드 구현: 관람평 데이터를 수집합니다."""
         if self.driver is None:
             self.start_browser()
+        assert self.driver is not None
 
         print(f"[MegaboxCrawler] 영화 페이지 접속: {self.url}")
         self.driver.get(self.url)
@@ -128,12 +132,16 @@ class MegaboxCrawler(BaseCrawler):
 
                     review_text = text.text.strip() if text else ""
 
-                    if review_text:
+                    score_text = score.text.strip() if score else ""
+                    date_text = date.text.strip() if date else ""
+
+                    # 과제 최소 조건인 별점·날짜·본문을 모두 가진 리뷰만 저장한다.
+                    if review_text and score_text and date_text:
                         reviews.append(
                             {
-                                "score": score.text.strip() if score else "",
+                                "score": score_text,
                                 "review": review_text,
-                                "date": date.text.strip() if date else "",
+                                "date": date_text,
                             }
                         )
                 except Exception:
@@ -153,6 +161,11 @@ class MegaboxCrawler(BaseCrawler):
         if self.reviews_df.empty:
             print("[MegaboxCrawler] 저장할 리뷰가 없습니다.")
             return
+        if len(self.reviews_df) < 500:
+            raise RuntimeError(
+                f"유효한 메가박스 리뷰가 {len(self.reviews_df)}개입니다. "
+                "별점·날짜·본문이 있는 리뷰가 최소 500개 필요합니다."
+            )
 
         os.makedirs(self.output_dir, exist_ok=True)
         save_path = os.path.join(self.output_dir, "reviews_megabox.csv")
