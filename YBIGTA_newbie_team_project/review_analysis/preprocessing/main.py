@@ -1,12 +1,18 @@
+import os
+import sys
 import glob
 import os
 from argparse import ArgumentParser
 from typing import Dict, Type
 
+# 파이썬 경로 인식 처리 (최상단) — crawling/main.py 와 동일하게,
+# 스크립트를 직접 실행해도 review_analysis 패키지를 import 할 수 있게 한다.
+sys.path.append(os.path.dirname(os.path.abspath(__file__)) + "/../../")
+
 from review_analysis.preprocessing.base_processor import BaseDataProcessor
 from review_analysis.preprocessing.imdb_processor import IMDbProcessor
 from review_analysis.preprocessing.megabox_processor import MegaboxProcessor
-from review_analysis.preprocessing.watcha_processor import WatchaProcessor
+from review_analysis.preprocessing.imdb_processor import IMDbProcessor
 
 
 PREPROCESS_CLASSES: Dict[str, Type[BaseDataProcessor]] = {

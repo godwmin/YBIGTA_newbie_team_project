@@ -22,3 +22,11 @@ htmlcov/
 # Editor settings
 .vscode/
 .idea/
+
+# Crawler / processor logs
+*.log
+
+# Selenium 로그인 프로필 (쿠키·개인정보 포함, 커밋 금지)
+.watcha_profile/
+*_profile/
+chromedriver*
