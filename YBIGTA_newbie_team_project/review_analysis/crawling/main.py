@@ -7,6 +7,7 @@ from typing import Dict, Type
 sys.path.append(os.path.dirname(os.path.abspath(__file__)) + "/../../")
 
 from review_analysis.crawling.base_crawler import BaseCrawler
+from review_analysis.crawling.imdb_crawler import IMDbCrawler
 from review_analysis.crawling.megabox_crawler import MegaboxCrawler
 from review_analysis.crawling.watcha_crawler import WatchaCrawler
 
@@ -14,6 +15,7 @@ from review_analysis.crawling.watcha_crawler import WatchaCrawler
 CRAWLER_CLASSES: Dict[str, Type[BaseCrawler]] = {
     "watcha": WatchaCrawler,
     "megabox": MegaboxCrawler,
+    "imdb": IMDbCrawler,
 }
 
 
