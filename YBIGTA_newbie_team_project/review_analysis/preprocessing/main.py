@@ -34,10 +34,7 @@ def create_parser() -> ArgumentParser:
         type=str,
         required=False,
         choices=PREPROCESS_CLASSES.keys(),
-        help=(
-            "Which processor to use. Choices: "
-            f"{', '.join(PREPROCESS_CLASSES.keys())}"
-        ),
+        help=f"Which processor to use. Choices: {', '.join(PREPROCESS_CLASSES.keys())}",
     )
 
     parser.add_argument(
