@@ -1,20 +1,24 @@
-import os
 import glob
+import os
 from argparse import ArgumentParser
 from typing import Dict, Type
+
 from review_analysis.preprocessing.base_processor import BaseDataProcessor
-from review_analysis.preprocessing.watcha_processor import WatchaProcessor
+from review_analysis.preprocessing.imdb_processor import IMDbProcessor
 from review_analysis.preprocessing.megabox_processor import MegaboxProcessor
+from review_analysis.preprocessing.watcha_processor import WatchaProcessor
 
 
 PREPROCESS_CLASSES: Dict[str, Type[BaseDataProcessor]] = {
     "reviews_watcha": WatchaProcessor,
     "reviews_megabox": MegaboxProcessor,
+    "reviews_imdb": IMDbProcessor,
 }
 
 
 def create_parser() -> ArgumentParser:
     parser = ArgumentParser()
+
     parser.add_argument(
         "-o",
         "--output_dir",
@@ -23,6 +27,7 @@ def create_parser() -> ArgumentParser:
         default="database",
         help="Output file dir. Example: database",
     )
+
     parser.add_argument(
         "-c",
         "--preprocessor",
@@ -31,13 +36,29 @@ def create_parser() -> ArgumentParser:
         choices=PREPROCESS_CLASSES.keys(),
         help=f"Which processor to use. Choices: {', '.join(PREPROCESS_CLASSES.keys())}",
     )
+
     parser.add_argument(
         "-a",
         "--all",
         action="store_true",
         help="Run all data preprocessors. Default to False.",
     )
+
     return parser
+
+
+def run_preprocessor(
+    processor_name: str,
+    input_path: str,
+    output_dir: str,
+) -> None:
+    """Run one registered review preprocessor."""
+    preprocessor_class = PREPROCESS_CLASSES[processor_name]
+    preprocessor = preprocessor_class(input_path, output_dir)
+
+    preprocessor.preprocess()
+    preprocessor.feature_engineering()
+    preprocessor.save_to_database()
 
 
 if __name__ == "__main__":
@@ -46,26 +67,48 @@ if __name__ == "__main__":
 
     os.makedirs(args.output_dir, exist_ok=True)
 
-    # 1. 단일 사이트 전처리 실행 (-c 옵션)
+    # 단일 사이트 전처리 실행
     if args.preprocessor:
         base_name = args.preprocessor
-        csv_file = os.path.join(args.output_dir, f"{base_name}.csv")
-        preprocessor_class = PREPROCESS_CLASSES[base_name]
-        preprocessor = preprocessor_class(csv_file, args.output_dir)
-        preprocessor.preprocess()
-        preprocessor.feature_engineering()
-        preprocessor.save_to_database()
+        csv_file = os.path.join(
+            args.output_dir,
+            f"{base_name}.csv",
+        )
 
-    # 2. 모든 사이트 전처리 실행 (-a 옵션)
+        if not os.path.exists(csv_file):
+            raise FileNotFoundError(
+                f"Input CSV not found: {csv_file}"
+            )
+
+        run_preprocessor(
+            base_name,
+            csv_file,
+            args.output_dir,
+        )
+
+    # 등록된 모든 사이트 전처리 실행
     elif args.all:
-        review_collections = glob.glob(os.path.join(args.output_dir, "reviews_*.csv"))
+        review_collections = glob.glob(
+            os.path.join(
+                args.output_dir,
+                "reviews_*.csv",
+            )
+        )
+
         for csv_file in review_collections:
-            base_name = os.path.splitext(os.path.basename(csv_file))[0]
+            base_name = os.path.splitext(
+                os.path.basename(csv_file)
+            )[0]
+
             if base_name in PREPROCESS_CLASSES:
-                preprocessor_class = PREPROCESS_CLASSES[base_name]
-                preprocessor = preprocessor_class(csv_file, args.output_dir)
-                preprocessor.preprocess()
-                preprocessor.feature_engineering()
-                preprocessor.save_to_database()
+                run_preprocessor(
+                    base_name,
+                    csv_file,
+                    args.output_dir,
+                )
+
     else:
-        print("옵션을 지정해 주세요. 예: -c reviews_megabox 또는 -a")
+        print(
+            "옵션을 지정해 주세요. "
+            "예: -c reviews_imdb 또는 -a"
+        )
