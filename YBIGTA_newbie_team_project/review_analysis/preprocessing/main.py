@@ -1,7 +1,6 @@
-import os
-import sys
 import glob
 import os
+import sys
 from argparse import ArgumentParser
 from typing import Dict, Type
 
@@ -12,7 +11,7 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)) + "/../../")
 from review_analysis.preprocessing.base_processor import BaseDataProcessor
 from review_analysis.preprocessing.imdb_processor import IMDbProcessor
 from review_analysis.preprocessing.megabox_processor import MegaboxProcessor
-from review_analysis.preprocessing.imdb_processor import IMDbProcessor
+from review_analysis.preprocessing.watcha_processor import WatchaProcessor
 
 
 PREPROCESS_CLASSES: Dict[str, Type[BaseDataProcessor]] = {

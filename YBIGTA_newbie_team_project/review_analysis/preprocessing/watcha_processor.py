@@ -134,9 +134,21 @@ class WatchaProcessor(BaseDataProcessor):
         corpus = df["text_clean"].fillna("").tolist()
         tfidf = vectorizer.fit_transform(corpus)
 
-        n_components = min(10, tfidf.shape[1] - 1) if tfidf.shape[1] > 1 else 1
-        svd = TruncatedSVD(n_components=n_components, random_state=42)
-        emb = svd.fit_transform(tfidf)
+        n_components = min(
+            10,
+            tfidf.shape[0] - 1,
+            tfidf.shape[1] - 1,
+        )
+        if n_components < 1:
+            # 문서나 어휘가 하나뿐인 극소 입력도 저장 가능하게 한다.
+            emb = tfidf.toarray()[:, :1]
+        else:
+            svd = TruncatedSVD(
+                n_components=n_components,
+                algorithm="arpack",
+                random_state=42,
+            )
+            emb = svd.fit_transform(tfidf)
         for i in range(emb.shape[1]):
             df[f"tfidf_svd_{i}"] = emb[:, i]
 

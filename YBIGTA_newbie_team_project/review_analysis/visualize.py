@@ -26,16 +26,24 @@ from typing import Dict, List, Optional
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+from matplotlib import font_manager
 import numpy as np
 import pandas as pd  # type: ignore[import-untyped]
 from sklearn.feature_extraction.text import TfidfVectorizer  # type: ignore[import-untyped]
 
-# 한글 폰트 (Windows: Malgun Gothic)
-for _font in ("Malgun Gothic", "AppleGothic", "NanumGothic"):
+# 실행 OS에 실제 설치된 한글 폰트만 선택한다.
+for _font in (
+    "Apple SD Gothic Neo",
+    "AppleGothic",
+    "Malgun Gothic",
+    "NanumGothic",
+    "Noto Sans CJK KR",
+):
     try:
+        font_manager.findfont(_font, fallback_to_default=False)
         plt.rcParams["font.family"] = _font
         break
-    except Exception:
+    except ValueError:
         continue
 plt.rcParams["axes.unicode_minus"] = False
 
@@ -114,9 +122,16 @@ def _build_dates(df: pd.DataFrame) -> pd.Series:
     """절대 날짜 컬럼을 우선 파싱하고, 남은 결측은 상대 표기로 메운다."""
     parsed = pd.Series(pd.NaT, index=df.index, dtype="datetime64[ns]")
     for col in DATE_COLS:
+        if not parsed.isna().any():
+            break
         if col not in df.columns:
             continue
-        candidate = pd.to_datetime(df[col], errors="coerce", utc=True).dt.tz_localize(None)
+        candidate = pd.to_datetime(
+            df[col],
+            errors="coerce",
+            utc=True,
+            format="mixed",
+        ).dt.tz_localize(None)
         parsed = parsed.fillna(candidate)
 
     if parsed.isna().any() and "date" in df.columns:
@@ -265,7 +280,9 @@ def comparison(sites: Dict[str, pd.DataFrame]) -> None:
         labels = [m.strftime("%Y-%m") for m in all_months]
         fig, ax = plt.subplots(figsize=(10, 4.5))
         for i, (n, s) in enumerate(monthlies.items()):
-            aligned = s.reindex(all_months, fill_value=0)
+            # 사이트의 관측 범위 밖은 '리뷰 0건'이 아니라 '미수집'이므로
+            # NaN으로 두어 선을 억지로 0까지 연결하지 않는다.
+            aligned = s.reindex(all_months)
             ax.plot(labels, aligned.values, marker="o", label=n,
                     color=colors[i % len(colors)])
         ax.set_title("사이트별 월별 리뷰 수 추이 (시계열 비교)")
@@ -278,7 +295,12 @@ def comparison(sites: Dict[str, pd.DataFrame]) -> None:
     # 리뷰 길이 비교 (박스플롯) — 사이트별 서술 밀도 차이
     fig, ax = plt.subplots(figsize=(8, 4.5))
     data = [d["_len"].dropna().values for d in sites.values()]
-    bp = ax.boxplot(data, labels=list(sites.keys()), patch_artist=True, showfliers=False)
+    bp = ax.boxplot(
+        data,
+        tick_labels=list(sites.keys()),
+        patch_artist=True,
+        showfliers=False,
+    )
     for patch, color in zip(bp["boxes"], colors):
         patch.set_facecolor(color)
         patch.set_alpha(0.6)
