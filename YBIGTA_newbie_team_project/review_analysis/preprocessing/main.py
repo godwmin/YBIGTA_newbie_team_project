@@ -1,36 +1,33 @@
+import glob
+import os
 from argparse import ArgumentParser
-from pathlib import Path
-import sys
 from typing import Dict, Type
-
-if __package__ is None or __package__ == "":
-    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from review_analysis.preprocessing.base_processor import BaseDataProcessor
 from review_analysis.preprocessing.imdb_processor import IMDbProcessor
+from review_analysis.preprocessing.megabox_processor import MegaboxProcessor
+from review_analysis.preprocessing.watcha_processor import WatchaProcessor
 
 
-# 모든 preprocessing 클래스를 예시 형식으로 적어주세요. 
-# key는 "reviews_사이트이름"으로, value는 해당 처리를 위한 클래스
 PREPROCESS_CLASSES: Dict[str, Type[BaseDataProcessor]] = {
+    "reviews_watcha": WatchaProcessor,
+    "reviews_megabox": MegaboxProcessor,
     "reviews_imdb": IMDbProcessor,
-    # key는 크롤링한 csv파일 이름으로 적어주세요! ex. reviews_naver.csv -> reviews_naver
 }
-
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
-DATABASE_DIR = PROJECT_ROOT / "database"
 
 
 def create_parser() -> ArgumentParser:
     parser = ArgumentParser()
+
     parser.add_argument(
         "-o",
         "--output_dir",
         type=str,
         required=False,
-        default=str(DATABASE_DIR),
-        help="Output file dir. Example: ../../database",
+        default="database",
+        help="Output file dir. Example: database",
     )
+
     parser.add_argument(
         "-c",
         "--preprocessor",
@@ -42,38 +39,79 @@ def create_parser() -> ArgumentParser:
             f"{', '.join(PREPROCESS_CLASSES.keys())}"
         ),
     )
+
     parser.add_argument(
         "-a",
         "--all",
         action="store_true",
         help="Run all data preprocessors. Default to False.",
     )
+
     return parser
 
 
-def run_processor(processor_name: str, output_dir: str) -> None:
-    """등록된 전처리기를 원본 CSV와 출력 폴더에 맞춰 실행한다."""
-    input_path = DATABASE_DIR / f"{processor_name}.csv"
-    if not input_path.exists():
-        raise FileNotFoundError(f"Input CSV not found: {input_path}")
+def run_preprocessor(
+    processor_name: str,
+    input_path: str,
+    output_dir: str,
+) -> None:
+    """Run one registered review preprocessor."""
+    preprocessor_class = PREPROCESS_CLASSES[processor_name]
+    preprocessor = preprocessor_class(input_path, output_dir)
 
-    processor_class = PREPROCESS_CLASSES[processor_name]
-    processor = processor_class(str(input_path), output_dir)
-    processor.preprocess()
-    processor.feature_engineering()
-    processor.save_to_database()
+    preprocessor.preprocess()
+    preprocessor.feature_engineering()
+    preprocessor.save_to_database()
 
 
 if __name__ == "__main__":
     parser = create_parser()
     args = parser.parse_args()
 
-    Path(args.output_dir).mkdir(parents=True, exist_ok=True)
+    os.makedirs(args.output_dir, exist_ok=True)
 
-    if args.all:
-        for processor_name in PREPROCESS_CLASSES:
-            run_processor(processor_name, args.output_dir)
-    elif args.preprocessor:
-        run_processor(args.preprocessor, args.output_dir)
+    # 단일 사이트 전처리 실행
+    if args.preprocessor:
+        base_name = args.preprocessor
+        csv_file = os.path.join(
+            args.output_dir,
+            f"{base_name}.csv",
+        )
+
+        if not os.path.exists(csv_file):
+            raise FileNotFoundError(
+                f"Input CSV not found: {csv_file}"
+            )
+
+        run_preprocessor(
+            base_name,
+            csv_file,
+            args.output_dir,
+        )
+
+    # 등록된 모든 사이트 전처리 실행
+    elif args.all:
+        review_collections = glob.glob(
+            os.path.join(
+                args.output_dir,
+                "reviews_*.csv",
+            )
+        )
+
+        for csv_file in review_collections:
+            base_name = os.path.splitext(
+                os.path.basename(csv_file)
+            )[0]
+
+            if base_name in PREPROCESS_CLASSES:
+                run_preprocessor(
+                    base_name,
+                    csv_file,
+                    args.output_dir,
+                )
+
     else:
-        raise ValueError("No preprocessor selected. Use --all or -c.")
+        print(
+            "옵션을 지정해 주세요. "
+            "예: -c reviews_imdb 또는 -a"
+        )
