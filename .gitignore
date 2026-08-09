@@ -30,3 +30,8 @@ htmlcov/
 .watcha_profile/
 *_profile/
 chromedriver*
+
+# DB 접속 정보 (커밋 시 개인정보/과금 사고로 직결)
+.env
+.env.*
+!.env.example

@@ -31,3 +31,10 @@ webdriver-manager==4.0.2
 # ---- 테스트 ----
 pytest==8.4.2
 httpx==0.28.1
+
+# ---- DB (8회차: MySQL / MongoDB) ----
+SQLAlchemy==2.0.36
+PyMySQL==1.1.1
+cryptography==44.0.0   # MySQL 8 caching_sha2_password 인증에 필요
+python-dotenv==1.0.1
+pymongo==4.10.1
