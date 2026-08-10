@@ -454,9 +454,74 @@ python -m pytest test/test_user_repository.py -v    # 4 passed
 python -m pytest test/ -q                           # 21 passed
 ```
 
+### 8-4. AWS RDS 연동 검증
+
+배포 환경에서는 같은 코드가 `.env` 의 `MYSQL_HOST` 만 RDS 엔드포인트로 바뀝니다.
+**EC2 컨테이너 → RDS(MySQL 8.0)** 경로로 아래를 확인했습니다.
+
+기동 시 `init_db()` 가 RDS 에 `users` 테이블을 생성한 로그:
+
+```
+sqlalchemy.engine.Engine  SELECT DATABASE()
+sqlalchemy.engine.Engine  CREATE TABLE IF NOT EXISTS users (
+    email VARCHAR(255) NOT NULL PRIMARY KEY, ... ) ENGINE=InnoDB ...
+sqlalchemy.engine.Engine  COMMIT
+INFO:     Application startup complete.
+```
+
+이어서 유저 API 전체 흐름을 검증했습니다. **성공 경로뿐 아니라, 변경·삭제가 실제로
+반영됐는지를 "실패해야 하는 요청"으로 함께 확인**했습니다.
+
+| 요청 | 응답 | 확인하려는 것 |
+|---|---|---|
+| `POST /api/user/register` | `201` | RDS 에 INSERT |
+| `POST /api/user/login` | `200` | RDS 에서 SELECT |
+| `PUT /api/user/update-password` | `200` | UPDATE |
+| `POST /api/user/login` (새 비밀번호) | `200` | 변경이 반영됨 |
+| `POST /api/user/login` (옛 비밀번호) | `400` `Invalid ID/PW` | 옛 값이 남아 있지 않음 |
+| `DELETE /api/user/delete` | `200` | DELETE |
+| `POST /api/user/login` (삭제 후) | `400` `User not Found.` | 실제로 지워짐 |
+
+### 8-5. 실행 결과 캡처 (Swagger UI on EC2)
+
+| 엔드포인트 | 캡처 |
+|---|---|
+| `POST /api/user/register` | ![register](aws/register.png) |
+| `POST /api/user/login` | ![login](aws/login.png) |
+| `PUT /api/user/update-password` | ![update-password](aws/update-password.png) |
+| `DELETE /api/user/delete` | ![delete](aws/delete.png) |
+
+### 8-6. RDS 네트워크 구성
+
+RDS 는 **퍼블릭 액세스를 끄고**, 같은 VPC 안의 EC2 에서만 접근하도록 구성했습니다.
+실제로 로컬 PC 에서 엔드포인트를 조회하면 사설 IP 로 해석되어 인터넷 경로가 존재하지 않습니다.
+
+```
+$ nslookup ybigta-mysql.****.ap-northeast-2.rds.amazonaws.com
+  → 172.31.34.18        # 사설 IP (VPC 내부 주소)
+
+$ Test-NetConnection <endpoint> -Port 3306
+  → TcpTestSucceeded : False     # 로컬에서는 도달 불가 (의도된 결과)
+```
+
+EC2 의 사설 IP 는 `172.31.47.56` 로 RDS 와 동일한 VPC 대역에 있어, 컨테이너에서는 정상적으로 연결됩니다.
+자세한 보안 그룹 구성은 10장을 참고하세요.
+
 ---
 
-<!-- 9장(Docker), 10장(AWS·CI/CD)은 팀원 2·3이 작성합니다. -->
+<!--
+9장(Docker), 10장(AWS·CI/CD)은 팀원 2·3이 작성합니다.
+제출 체크리스트상 아래 항목이 README 에 반드시 포함되어야 합니다.
+
+9장 (Docker) — 팀원 2
+  - Docker Hub public 이미지 주소  (현재 배포된 이미지: godwmin/ybigta-newbie-team-project:latest)
+  - ![preprocess](aws/preprocess.png)  전처리 API Swagger 캡처
+
+10장 (AWS·CI/CD) — 팀원 3
+  - GitHub Actions 성공 화면 캡처 (status 와 job 이름이 보이게)
+  - VPC 보안 그룹 설명  ← 8-6 에 RDS 쪽 확인 결과를 적어 두었으니 이어서 쓰면 됩니다
+  - 로드 밸런서(ALB) 설명 + 설정 화면 캡처 (가산점)
+-->
 
 ---
 
@@ -567,16 +632,87 @@ def get_db() -> Generator[Session, None, None]:
 (2) 유출 시 되돌릴 수 없습니다. 같은 이유로 CI/CD 에서는 GitHub Secrets, 컨테이너에서는
 환경변수 주입을 씁니다. 한 번 커밋된 비밀값은 히스토리에 남으므로 **되돌리기보다 회전(rotate)** 이 원칙입니다.
 
-<!-- TODO(RDS 연결 후 채우기): 아래는 실제로 마주친 에러만 남기고 나머지는 지울 것 -->
-### 11-7. RDS 연결 시 마주친 문제
+### 11-7. 로컬에서 RDS 에 접속되지 않던 문제 — 보안 그룹이 아니라 "경로"의 문제
 
-- `(2003, "Can't connect to MySQL server on '...'")` → 보안 그룹 인바운드에 3306 이 없거나 소스 IP 불일치
-- `(1045, "Access denied for user ...")` → 계정/비밀번호 불일치
-- `(1049, "Unknown database 'ybigta'")` → RDS 생성 시 초기 DB 이름 미지정 → `CREATE DATABASE ybigta;`
-- 비밀번호에 `@` `:` `/` 가 들어가면 접속 URL 파싱이 깨짐 → `quote_plus()` 로 인코딩 (코드에 반영함)
-- 유휴 커넥션이 끊겨 `MySQL server has gone away` → `create_engine(..., pool_pre_ping=True, pool_recycle=280)`
+**증상.** RDS 엔드포인트를 받아 로컬에서 연결을 시도했으나 인증 단계까지 가지도 못하고
+TCP 연결 자체가 실패했습니다. 처음에는 보안 그룹 인바운드에 내 IP 가 빠진 것으로 의심했습니다.
 
-**개념 — 커넥션 풀.** 요청마다 TCP 연결·인증을 새로 하면 비싸기 때문에 SQLAlchemy 는 커넥션을
+**원인.** 엔드포인트를 DNS 조회해 보니 사설 IP 가 돌아왔습니다.
+
+```
+ybigta-mysql.****.ap-northeast-2.rds.amazonaws.com  →  172.31.34.18
+```
+
+`172.16.0.0/12` 는 사설 대역입니다. 즉 이 RDS 는 **퍼블릭 액세스가 꺼져 있어서**
+VPC 바깥에서는 애초에 도달할 경로가 없는 상태였습니다.
+보안 그룹을 아무리 열어도 달라지지 않습니다.
+
+**해결.** 설정을 되돌리는 대신, **같은 VPC 안의 EC2 에서 테스트**했습니다.
+EC2 사설 IP 가 `172.31.47.56` 로 같은 대역이라 그대로 연결됐고,
+실제 운영 경로(EC2 → RDS)를 그대로 검증하는 셈이라 더 정확한 테스트이기도 했습니다.
+
+**개념 — 퍼블릭 액세스와 보안 그룹은 다른 층위입니다.**
+
+| | 하는 일 | 비유 |
+|---|---|---|
+| 퍼블릭 액세스 | 인터넷에서 오는 **경로 자체**의 존재 여부 | 건물까지 가는 길이 있는가 |
+| 보안 그룹 | 도착한 트래픽을 포트/소스로 **허용·차단** | 건물 입구의 경비 |
+
+길이 없으면 경비를 아무리 통과시켜도 소용이 없습니다.
+"연결이 안 된다" 를 만났을 때 **TCP 도달 → 인증 → 쿼리** 순으로 층을 나눠 확인하면
+어느 층의 문제인지 바로 좁혀집니다. 이번에도 TCP 단계에서 끊긴 덕분에
+계정 정보를 의심하며 시간을 쓰지 않을 수 있었습니다.
+
+**참고 — 커넥션 풀.** 요청마다 TCP 연결·인증을 새로 하면 비싸기 때문에 SQLAlchemy 는 커넥션을
 풀에 보관해 재사용합니다. 그런데 RDS 는 유휴 커넥션을 일정 시간 뒤 끊으므로, 풀에 남아 있던
-"죽은" 커넥션을 그대로 쓰면 위 에러가 납니다. `pool_pre_ping` 은 대여 직전에 가벼운 확인 쿼리를 보내
-죽은 커넥션을 걸러내고, `pool_recycle` 은 일정 시간이 지난 커넥션을 선제적으로 폐기합니다.
+"죽은" 커넥션을 그대로 쓰면 `MySQL server has gone away` 가 납니다. 그래서
+`create_engine(..., pool_pre_ping=True, pool_recycle=280)` 을 걸어 두었습니다.
+`pool_pre_ping` 은 대여 직전에 가벼운 확인 쿼리를 보내 죽은 커넥션을 걸러내고,
+`pool_recycle` 은 일정 시간이 지난 커넥션을 선제적으로 폐기합니다.
+
+### 11-8. `.env` 를 고쳤는데 서버가 옛날 값을 쓰던 문제
+
+**증상.** MySQL 비밀번호가 틀려 `(1045, "Access denied")` 가 나길래 `.env` 를 고쳤는데도
+`POST /api/user/register` 가 계속 500 을 반환했습니다. `--reload` 로 띄워 뒀으니
+반영됐을 거라 생각했지만 응답은 그대로였습니다.
+
+**원인 추적.** 같은 요청을 in-process `TestClient` 로 보내면 `201` 이 나오는데
+실행 중인 서버로 보내면 `500` 이었습니다. 코드가 아니라 **프로세스의 상태** 차이라는 뜻입니다.
+프로세스 시작 시각과 `.env` 수정 시각을 비교하니 서버가 더 먼저 떠 있었습니다.
+
+**원인.** `load_dotenv()` 는 **모듈이 import 될 때 한 번만** 실행되고,
+`uvicorn --reload` 는 `.py` 파일만 감시합니다. `.env` 는 감시 대상이 아니라서
+파일을 고쳐도 이미 떠 있는 프로세스의 `os.environ` 과 생성이 끝난 `engine` 은 옛 값을 그대로 들고 있었습니다.
+
+**해결.** 서버를 완전히 재시작. `.env` 변경은 리로드가 아니라 **재기동**이 필요합니다.
+
+**개념 — 설정은 프로세스 시작 시점에 고정됩니다.** 12-factor 에서 설정을 환경변수로 두는 이유가
+"프로세스 경계에서 한 번 주입하고 그 뒤로는 불변" 이기 때문입니다. 컨테이너에서 환경변수를
+바꾸려면 컨테이너를 다시 만들어야 하는 것도 같은 이유입니다.
+같은 함정을 피하려면 **"설정을 바꿨으면 프로세스를 새로 띄운다"** 를 규칙으로 두는 편이 안전합니다.
+
+### 11-9. `.gitignore` 는 도커 이미지를 막아 주지 않는다
+
+**증상.** `.env` 를 `.gitignore` 에 넣어 뒀으니 안전하다고 생각했는데,
+`Dockerfile` 을 보니 `COPY . .` 였고 `.dockerignore` 가 없었습니다.
+그대로 빌드하면 DB 비밀번호와 RDS 엔드포인트가 든 `.env` 가 **이미지 안에 그대로 들어갑니다.**
+이미지는 Docker Hub 에 public 으로 올라가므로, 누구나 `docker pull` 후 꺼내볼 수 있는 상태였습니다.
+
+**해결.** `.dockerignore` 를 추가해 `.env`, `.git`, 캐시, 크롤링 로그·프로필을 빌드 컨텍스트에서 제외했습니다.
+
+**개념 — 두 파일은 거르는 대상이 다릅니다.**
+
+| 파일 | 무엇을 거르나 |
+|---|---|
+| `.gitignore` | git 이 **커밋**할 대상 |
+| `.dockerignore` | 도커가 **빌드 컨텍스트로 전송**할 대상 |
+
+이름이 비슷해서 하나만 있어도 될 것 같지만, 서로를 대신하지 못합니다.
+확인은 빌드한 이미지에서 직접 하는 게 확실합니다.
+
+```bash
+docker run --rm <image> ls -a /app     # .env 가 보이면 실패
+```
+
+한 번 public 이미지로 올라간 비밀값은 회수할 수 없으므로, `.gitignore` 와 마찬가지로
+**되돌리기보다 회전(rotate)** 이 원칙입니다.
