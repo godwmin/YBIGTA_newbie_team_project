@@ -580,3 +580,27 @@ def get_db() -> Generator[Session, None, None]:
 풀에 보관해 재사용합니다. 그런데 RDS 는 유휴 커넥션을 일정 시간 뒤 끊으므로, 풀에 남아 있던
 "죽은" 커넥션을 그대로 쓰면 위 에러가 납니다. `pool_pre_ping` 은 대여 직전에 가벼운 확인 쿼리를 보내
 죽은 커넥션을 걸러내고, `pool_recycle` 은 일정 시간이 지난 커넥션을 선제적으로 폐기합니다.
+
+### 11-8. Python 모듈 실행 경로 및 FastAPI 임포트 에러 [팀원 2, 윤소현]
+
+**증상.** `python app/main.py` 형태로 서버를 직접 실행하려 하면 프로젝트 패키지 루트 경로를 인식하지 못해 `ModuleNotFoundError` 또는 상대 경로 임포트 에러가 발생했습니다.
+
+**해결.** 파이썬 인터프리터의 `-m` 옵션을 활용하여 `python -m uvicorn app.main:app --reload` 방식으로 실행.
+
+**개념 — 파이썬 모듈 실행과 `sys.path`.** 스크립트 파일을 직접 실행하면 실행된 파일의 디렉토리가 `sys.path` 최상단에 들어가면서 상위 패키지 모듈 탐색이 깨질 수 있습니다. `-m` 옵션을 사용하면 현재 최상위 루트 작업 디렉토리를 기준(`sys.path`)으로 패키지 구조와 임포트 컨텍스트를 올바르게 유지할 수 있습니다.
+
+### 11-9. MySQL 연동 의존성 패키지 누락 문제 (`pymysql`)
+
+**증상.** main 브랜치 병합 후 FastAPI 서버 구동 시 `ModuleNotFoundError: No module named 'pymysql'` 에러와 함께 서버가 정상 실행되지 않았습니다.
+
+**해결.** 실행 환경에 `pip install pymysql` 명령어로 의존성을 설치하고, `requirements.txt`에 명시하여 실행 환경을 동기화했습니다.
+
+**개념 — 명시적 의존성 관리.** SQLAlchemy는 다양한 데이터베이스 방언(Dialect)을 지원하며, 내부적으로 DBAPI 드라이버를 불러와 사용합니다. MySQL의 경우 Python 3 호환 순수 파이썬 드라이버인 `pymysql`이 필수적이므로 프로젝트 초기 구성 및 컨테이너화 시 `requirements.txt`에 해당 드라이버 의존성을 반드시 명시해두어야 설치 누락을 방지할 수 있습니다.
+
+### 11-10. MongoDB Atlas 클라우드 DB 연동 및 전처리 파이프라인 검증
+
+**증상.** MongoDB Atlas 클라우드 DB 연동 후 `/review/preprocess/imdb` API 호출 시 `404 Not Found ("MongoDB 'crawling_data' 컬렉션에 데이터가 없습니다.")` 에러가 발생했습니다.
+
+**해결.** MongoDB Compass를 사용해 Atlas Cluster(`cluster0`) 내에 데이터베이스(`ybigta_db`) 및 컬렉션(`crawling_data`)을 생성하고 원본 크롤링 데이터(`reviews_imdb.csv`)를 Import한 후 재요청하여 `200 OK` 응답을 확인했습니다.
+
+**개념 — 클라우드 데이터 파이프라인 및 보안.** `.env` 파일에 Atlas Connection URI(`MONGO_URL`)를 동적으로 주입하여 로컬/클라우드 DB 환경을 유연하게 전환했습니다. 또한 민감한 접속 정보가 포함된 `.env` 파일 및 캐시 파일이 저장소나 Docker 이미지 빌드 시 유출되지 않도록 `.gitignore`와 `.dockerignore`에 철저히 제외 등록을 마쳤습니다.
