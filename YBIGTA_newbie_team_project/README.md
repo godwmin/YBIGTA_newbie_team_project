@@ -116,12 +116,13 @@ uvicorn app.main:app --reload --port 8000
 | PUT | `/api/user/update-password` | 비밀번호 변경 | 200 |
 | DELETE | `/api/user/delete` | 회원 탈퇴 | 200 |
 
-사용자 정보는 DB 없이 `database/users.json` 파일에 저장됩니다(`app/config.py` 의 `USER_DATA`).
+사용자 정보는 **MySQL `users` 테이블**에 저장됩니다(8회차부터. 이전에는 `database/users.json`).
+접속 정보는 `.env` 로 주입하며, 설정 방법은 [8장](#8-db-연동--mysql-유저-api-8회차)을 참고하세요.
 포트를 바꾸려면 `app/config.py` 의 `PORT` 를 수정하거나 `--port` 옵션을 주면 됩니다.
 
 테스트 실행:
 ```bash
-python -m pytest test/ -q     # 17 passed
+python -m pytest test/ -q     # 21 passed
 ```
 
 ---
@@ -395,3 +396,187 @@ python -m pytest test/ -q     # 17 passed
   `feature/watcha-review-analysis`, `feature/cross-site-comparison`)
 - 캐시·산출물은 커밋하지 않습니다. `__pycache__/`, `.mypy_cache/`, `.pytest_cache/`, `*.log`,
   `.DS_Store`, `__MACOSX/` 는 루트 `.gitignore` 에서 제외 처리합니다.
+
+---
+
+## 8. DB 연동 — MySQL 유저 API (8회차)  ✅ [팀원 1]
+
+### 8-1. 구조
+
+기존에 `database/users.json` 파일에 저장하던 유저 정보를 **MySQL** 로 옮겼습니다.
+계층은 그대로 유지하고, 저장소(Repository) 구현만 교체했습니다.
+
+```
+user_router  →  user_service  →  user_repository  →  MySQL(users)
+   (HTTP)        (비즈니스 규칙)      (SQL 실행)         RDS / 로컬
+                        ▲
+                        └─ dependencies.py 가 요청마다 Session 을 주입
+```
+
+| 파일 | 역할 |
+|---|---|
+| `database/mysql_connection.py` | `.env` 를 읽어 `engine` / `SessionLocal` 생성, `users` 테이블 DDL |
+| `app/user/user_repository.py` | `get_user_by_email` / `save_user` / `delete_user` 를 SQL 로 구현 |
+| `app/dependencies.py` | `get_db` → `get_user_repository` → `get_user_service` 의존성 체인 |
+| `test/test_user_repository.py` | 인메모리 SQLite 로 Repository CRUD 검증 (제공된 파일) |
+
+`users` 테이블 스키마 (앱 기동 시 `init_db()` 가 `CREATE TABLE IF NOT EXISTS` 로 생성):
+
+| 컬럼 | 타입 | 제약 |
+|---|---|---|
+| `email` | VARCHAR(255) | PRIMARY KEY |
+| `password` | VARCHAR(255) | NOT NULL |
+| `username` | VARCHAR(255) | NOT NULL |
+
+### 8-2. 실행 방법
+
+```bash
+cp .env.example .env      # 값 채우기 (.env 는 커밋 금지)
+pip install -r requirements.txt
+uvicorn app.main:app --reload --port 8000
+```
+
+`.env` 키 (로컬 / RDS 모두 동일):
+
+```
+MYSQL_USER=...
+MYSQL_PASSWORD=...
+MYSQL_HOST=127.0.0.1          # RDS 사용 시 엔드포인트로 교체
+MYSQL_PORT=3306
+MYSQL_DATABASE=ybigta
+MONGO_URL=...                 # 전처리 API용
+```
+
+### 8-3. 테스트
+
+```bash
+python -m pytest test/test_user_repository.py -v    # 4 passed
+python -m pytest test/ -q                           # 21 passed
+```
+
+---
+
+<!-- 9장(Docker), 10장(AWS·CI/CD)은 팀원 2·3이 작성합니다. -->
+
+---
+
+## 11. 트러블슈팅 및 개념 정리  ✅ [팀원 1]
+
+### 11-1. pydantic 모델을 ORM 모델로 착각한 문제
+
+**증상.** 처음에는 `User` 를 SQLAlchemy ORM 모델로 바꿔 `session.add(user)` 로 저장하려 했는데,
+`user_schema.py` 의 `User` 는 `BaseModel` (pydantic) 이라 `add()` 대상이 되지 못했습니다.
+게다가 명세상 수정 가능한 파일은 `user_repository.py` 와 `dependencies.py` 뿐이라
+스키마를 ORM 모델로 바꾸는 선택지 자체가 없었습니다.
+
+**해결.** ORM 매핑 없이 **SQLAlchemy Core 의 `text()` 쿼리**로 SQL 을 직접 실행하고,
+조회 결과 `Row` 를 `User(...)` 로 변환해 돌려주도록 했습니다.
+
+```python
+row = self.db.execute(
+    text("SELECT email, password, username FROM users WHERE email = :email"),
+    {"email": email},
+).fetchone()
+return User(email=row.email, password=row.password, username=row.username) if row else None
+```
+
+**개념 — pydantic vs SQLAlchemy 모델.** 둘 다 "모델"이라 부르지만 역할이 다릅니다.
+pydantic 모델은 *HTTP 경계에서의 검증·직렬화* 담당(요청 JSON → 파이썬 객체, 응답 객체 → JSON)이고,
+SQLAlchemy 모델은 *DB 테이블과의 매핑* 담당입니다. 실무에서도 이 둘을 하나로 합치기보다
+따로 두고 변환하는 편이 안전합니다. 이번 과제는 Repository 계층이 그 변환 지점 역할을 했습니다.
+
+### 11-2. 생 SQL 을 쓰기로 한 이상 짚고 넘어가야 했던 것 — 파라미터 바인딩
+
+11-1 때문에 `text()` 로 SQL 문자열을 직접 쓰게 되면서, 값을 어떻게 꽂을지가 문제가 됐습니다.
+DBAPI 마다 `?`(sqlite3) / `%s`(PyMySQL) 로 스타일이 갈리는데,
+SQLAlchemy 는 그 위에서 **`:name` 네임드 바인딩**으로 통일해 줍니다.
+
+```python
+text("... WHERE email = :email")   # 값은 {"email": email} 딕셔너리로 전달
+```
+
+**개념 — 왜 f-string 으로 SQL 을 만들면 안 되는가.**
+`f"... WHERE email = '{email}'"` 처럼 문자열을 이어붙이면 입력값이 SQL 문법으로 해석되어
+**SQL Injection** 에 노출됩니다. (`email` 에 `' OR '1'='1` 을 넣으면 전체 행이 조회됩니다.)
+바인딩 파라미터를 쓰면 값은 항상 *데이터*로만 전달되고 문법으로 해석되지 않습니다.
+덤으로 같은 쿼리 문자열을 재사용하므로 DB 의 실행계획 캐시에도 유리합니다.
+
+### 11-3. UPSERT 문법이 MySQL 과 SQLite 에서 다른 문제
+
+**증상.** `test_update_existing_user` 는 **같은 이메일로 `save_user` 를 두 번 호출하면 갱신**되기를
+요구합니다. MySQL 이라면 `INSERT ... ON DUPLICATE KEY UPDATE` 한 줄이면 되지만,
+테스트는 **SQLite 인메모리 DB** 에서 돌아가고 SQLite 는 `ON CONFLICT ... DO UPDATE` 를 씁니다.
+한쪽 문법으로 쓰면 다른 쪽에서 문법 에러가 납니다.
+
+**해결.** 방언(dialect)에 의존하지 않도록 **조회 후 INSERT / UPDATE 분기**로 구현했습니다.
+쿼리 1회가 더 나가지만, 로컬 테스트(SQLite)와 운영(MySQL)에서 동일하게 동작합니다.
+
+**개념 — SQL 방언(dialect).** 표준 SQL 위에 DB 마다 확장 문법이 얹혀 있어서,
+`AUTO_INCREMENT`(MySQL) vs `AUTOINCREMENT`(SQLite) vs `SERIAL`(PostgreSQL) 처럼 갈립니다.
+SQLAlchemy 가 방언 차이를 흡수해 주지만, 이번처럼 `text()` 로 생 SQL 을 쓰면
+그 이점을 포기하는 것이므로 **이식성은 직접 챙겨야** 합니다.
+
+### 11-4. 테스트는 통과하는데 서버에서 데이터가 사라지는 문제 — 트랜잭션과 commit
+
+**증상.** `execute()` 만 하고 `commit()` 을 하지 않으면, 같은 세션 안에서는 조회가 되지만
+세션이 닫히는 순간 롤백되어 데이터가 남지 않습니다.
+
+**해결.** `save_user` / `delete_user` 끝에서 `self.db.commit()` 을 호출.
+
+**개념 — 트랜잭션과 세션 수명.**
+`SessionLocal(autocommit=False)` 은 첫 쿼리에서 트랜잭션을 열고, `commit()` 전까지의 변경은
+그 트랜잭션 안에서만 보입니다. 그래서 `dependencies.get_db()` 를 **제너레이터 의존성**으로 만들어
+`yield` 뒤 `finally: db.close()` 로 요청 1건 = 세션 1개 = 트랜잭션 1개 를 보장했습니다.
+세션을 전역 하나로 공유하면 요청끼리 트랜잭션이 섞이고, 커넥션 누수로 이어집니다.
+
+```python
+def get_db() -> Generator[Session, None, None]:
+    db = SessionLocal()
+    try:
+        yield db          # 라우터 핸들러가 이 세션을 사용
+    finally:
+        db.close()        # 예외가 나도 반드시 반납
+```
+
+### 11-5. `UserRepository()` 가 세션을 못 받던 문제 — 의존성 주입(DI)
+
+**증상.** 기존 `UserRepository` 는 인자 없이 생성되어 JSON 파일을 직접 열었지만,
+제공된 테스트는 `UserRepository(db_session)` 처럼 **세션을 주입**합니다.
+
+**해결.** 생성자를 `__init__(self, db: Session)` 로 바꾸고, `dependencies.py` 에
+`get_db → get_user_repository → get_user_service` 체인을 만들어 FastAPI 가 주입하도록 했습니다.
+
+**개념 — DI 를 쓰면 무엇이 좋은가.** Repository 가 "세션을 어디서 얻는지" 를 모르게 되므로,
+운영에서는 MySQL 세션을, 테스트에서는 SQLite 세션을 그대로 꽂아 넣을 수 있습니다.
+실제로 이번 테스트는 **MySQL 없이도** Repository 로직을 검증합니다.
+`app.dependency_overrides` 로 라우터 테스트에서 서비스를 통째로 mock 으로 바꾸는 것도 같은 원리입니다.
+
+### 11-6. `.env` 를 커밋할 뻔한 문제
+
+**증상.** 루트 `.gitignore` 에 `.env` 규칙이 없어서, DB 비밀번호가 그대로 올라갈 수 있는 상태였습니다.
+
+**해결.** 루트와 프로젝트 `.gitignore` 에 아래를 추가하고, 대신 값이 비어 있는 `.env.example` 을 커밋했습니다.
+
+```gitignore
+.env
+.env.*
+!.env.example
+```
+
+**개념 — 설정과 코드의 분리.** 접속 정보를 코드에 박으면 (1) 환경마다 코드를 고쳐야 하고
+(2) 유출 시 되돌릴 수 없습니다. 같은 이유로 CI/CD 에서는 GitHub Secrets, 컨테이너에서는
+환경변수 주입을 씁니다. 한 번 커밋된 비밀값은 히스토리에 남으므로 **되돌리기보다 회전(rotate)** 이 원칙입니다.
+
+<!-- TODO(RDS 연결 후 채우기): 아래는 실제로 마주친 에러만 남기고 나머지는 지울 것 -->
+### 11-7. RDS 연결 시 마주친 문제
+
+- `(2003, "Can't connect to MySQL server on '...'")` → 보안 그룹 인바운드에 3306 이 없거나 소스 IP 불일치
+- `(1045, "Access denied for user ...")` → 계정/비밀번호 불일치
+- `(1049, "Unknown database 'ybigta'")` → RDS 생성 시 초기 DB 이름 미지정 → `CREATE DATABASE ybigta;`
+- 비밀번호에 `@` `:` `/` 가 들어가면 접속 URL 파싱이 깨짐 → `quote_plus()` 로 인코딩 (코드에 반영함)
+- 유휴 커넥션이 끊겨 `MySQL server has gone away` → `create_engine(..., pool_pre_ping=True, pool_recycle=280)`
+
+**개념 — 커넥션 풀.** 요청마다 TCP 연결·인증을 새로 하면 비싸기 때문에 SQLAlchemy 는 커넥션을
+풀에 보관해 재사용합니다. 그런데 RDS 는 유휴 커넥션을 일정 시간 뒤 끊으므로, 풀에 남아 있던
+"죽은" 커넥션을 그대로 쓰면 위 에러가 납니다. `pool_pre_ping` 은 대여 직전에 가벼운 확인 쿼리를 보내
+죽은 커넥션을 걸러내고, `pool_recycle` 은 일정 시간이 지난 커넥션을 선제적으로 폐기합니다.
