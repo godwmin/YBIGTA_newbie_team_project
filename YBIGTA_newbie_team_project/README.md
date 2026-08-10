@@ -509,21 +509,80 @@ EC2 의 사설 IP 는 `172.31.47.56` 로 RDS 와 동일한 VPC 대역에 있어,
 
 ---
 
-<!--
-9장(Docker), 10장(AWS·CI/CD)은 팀원 2·3이 작성합니다.
-제출 체크리스트상 아래 항목이 README 에 반드시 포함되어야 합니다.
+### 9. Docker 및 컨테이너화 트러블슈팅 [팀원 2, 윤소현]
 
-9장 (Docker) — 팀원 2
-  - Docker Hub public 이미지 주소  (현재 배포된 이미지: godwmin/ybigta-newbie-team-project:latest)
-  - ![preprocess](aws/preprocess.png)  전처리 API Swagger 캡처
 
-10장 (AWS·CI/CD) — 팀원 3
-  - GitHub Actions 성공 화면 캡처 (status 와 job 이름이 보이게)
-  - VPC 보안 그룹 설명  ← 8-6 에 RDS 쪽 확인 결과를 적어 두었으니 이어서 쓰면 됩니다
-  - 로드 밸런서(ALB) 설명 + 설정 화면 캡처 (가산점)
--->
+#### 9-1. Python 모듈 실행 경로 및 FastAPI 임포트 에러
+**증상.** `python app/main.py` 형태로 서버를 직접 실행하려 하면 프로젝트 패키지 루트 경로를 인식하지 못해 `ModuleNotFoundError` 또는 상대 경로 임포트 에러가 발생했습니다.
+**해결.** 파이썬 인터프리터의 `-m` 옵션을 활용하여 `python -m uvicorn app.main:app --reload` 방식으로 실행.
+**개념 — 파이썬 모듈 실행과 sys.path.** 스크립트 파일을 직접 실행하면 실행된 파일의 디렉토리가 `sys.path` 최상단에 들어가면서 상위 패키지 모듈 탐색이 깨질 수 있습니다. `-m` 옵션을 사용하면 현재 최상위 루트 작업 디렉토리를 기준(`sys.path`)으로 패키지 구조와 임포트 컨텍스트를 올바르게 유지할 수 있습니다.
 
----
+#### 9-2. MySQL 연동 의존성 패키지 누락 문제 (`pymysql`)
+**증상.** main 브랜치 병합 후 FastAPI 서버 구동 시 `ModuleNotFoundError: No module named 'pymysql'` 에러와 함께 서버가 정상 실행되지 않았습니다.
+**해결.** 실행 환경에 `pip install pymysql` 명령어로 의존성을 설치하고, `requirements.txt`에 명시하여 실행 환경을 동기화했습니다.
+**개념 — 명시적 의존성 관리.** SQLAlchemy는 다양한 데이터베이스 방언(Dialect)을 지원하며, 내부적으로 DBAPI 드라이버를 불러와 사용합니다. MySQL의 경우 Python 3 호환 순수 파이썬 드라이버인 `pymysql`이 필수적이므로 프로젝트 초기 구성 및 컨테이너화 시 `requirements.txt`에 해당 드라이버 의존성을 반드시 명시해두어야 설치 누락을 방지할 수 있습니다.
+
+#### 9-3. MongoDB Atlas 클라우드 DB 연동 및 전처리 파이프라인 검증
+**증상.** MongoDB Atlas 클라우드 DB 연동 후 `/review/preprocess/imdb` API 호출 시 `404 Not Found ("MongoDB 'crawling_data' 컬렉션에 데이터가 없습니다.")` 에러가 발생했습니다.
+**해결.** MongoDB Compass를 사용해 Atlas Cluster(`cluster0`) 내에 데이터베이스(`ybigta_db`) 및 컬렉션(`crawling_data`)을 생성하고 원본 크롤링 데이터(`reviews_imdb.csv`)를 Import한 후 재요청하여 `200 OK` 응답을 확인했습니다.
+**개념 — 클라우드 데이터 파이프라인 및 보안.** `.env` 파일에 Atlas Connection URI(`MONGO_URL`)를 동적으로 주입하여 로컬/클라우드 DB 환경을 유연하게 전환했습니다. 또한 민감한 접속 정보가 포함된 `.env` 파일 및 캐시 파일이 저장소나 Docker 이미지 빌드 시 유출되지 않도록 `.gitignore`와 `.dockerignore`에 철저히 제외 등록을 마쳤습니다.
+
+------
+
+
+## 10. Docker, AWS 배포 및 CI/CD
+
+### 10-1. Docker Hub
+
+- Public repository: [godwmin/ybigta-newbie-team-project](https://hub.docker.com/r/godwmin/ybigta-newbie-team-project)
+- FastAPI 서버를 Docker 이미지로 빌드하고 Docker Hub에 `latest`와 커밋 SHA 태그로 push했습니다.
+- `.dockerignore`에서 `.env`, Git 메타데이터, 캐시, 로그 및 제출용 이미지를 제외해 비밀값 유출과 이미지 용량 증가를 방지했습니다.
+
+### 10-2. AWS EC2 배포 및 API 실행 결과
+
+- Swagger UI: `http://13.125.242.227:8000/docs`
+- EC2의 Ubuntu 환경에 Docker Engine을 설치하고, Docker Hub의 public 이미지를 pull해 `ybigta-app` 컨테이너로 실행했습니다.
+- 배포 후 EC2 내부에서 FastAPI `/docs` 응답 `200`, RDS MySQL `SELECT 1`, MongoDB Atlas `ping` 응답을 각각 확인했습니다.
+
+#### User API
+
+| API | 실행 결과 |
+|---|---|
+| `POST /api/user/register` | ![register API 성공](aws/register.png) |
+| `POST /api/user/login` | ![login API 성공](aws/login.png) |
+| `PUT /api/user/update-password` | ![update password API 성공](aws/update.png) |
+| `DELETE /api/user/delete` | ![delete API 성공](aws/delete.png) |
+
+#### Review preprocessing API
+
+`POST /review/preprocess/{site_name}`
+
+![review preprocess API 성공](aws/review.png)
+
+### 10-3. GitHub Actions CI/CD
+
+`.github/workflows/deploy.yaml`에 다음 두 job을 구성했습니다.
+
+1. **Build and Push Docker Image**: GitHub의 최신 코드로 Docker 이미지를 빌드하고 Docker Hub에 push
+2. **Deploy to EC2**: EC2에 SSH로 접속해 최신 이미지를 pull하고 기존 컨테이너를 교체한 뒤 `/docs` 상태를 확인
+
+Docker Hub 토큰, EC2 SSH 키, RDS 계정 및 Atlas URI는 코드에 작성하지 않고 GitHub Actions Repository Secrets로 주입했습니다.
+
+![GitHub Actions 배포 성공](aws/github_action.png)
+
+### 10-4. RDS 비공개 VPC 보안 구성
+
+MySQL은 Amazon RDS로 호스팅하되 **Public access를 `No`**로 설정해 인터넷에서 DB로 직접 접근하는 경로를 차단했습니다. RDS와 EC2를 같은 VPC에 배치하고, RDS 보안 그룹의 MySQL `3306` 인바운드 소스를 IP 대역이 아닌 **EC2 보안 그룹**으로만 제한했습니다.
+
+이 구성은 EC2의 IP가 변경되어도 보안 그룹 간 참조가 유지되며, FastAPI 컨테이너에서만 RDS의 `users` 테이블을 사용할 수 있습니다.
+
+#### Public access 차단
+
+![RDS public access No](aws/rds_public_access.jpeg)
+
+#### EC2 보안 그룹에만 3306 허용
+
+![RDS security group inbound](aws/rds_security_group.jpeg)
 
 ## 11. 트러블슈팅 및 개념 정리  ✅ [팀원 1]
 

@@ -35,7 +35,8 @@ def preprocess_review_data(site_name: str):
         processor = processor_cls(input_path=dummy_input_path, output_dir=dummy_output_dir)
     except TypeError:
         # 인자가 필요 없는 기본 클래스인 경우
-        processor = processor_cls()
+        # (위 호출이 TypeError일 때만 도달하므로 인자 없는 호출이 맞다. mypy는 이를 알 수 없음)
+        processor = processor_cls()  # type: ignore[call-arg]
 
     # 4. 데이터프레임 변환 후 전처리 수행
     df = pd.DataFrame(raw_data)
