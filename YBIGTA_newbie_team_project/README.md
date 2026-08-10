@@ -456,9 +456,24 @@ python -m pytest test/ -q                           # 21 passed
 
 ---
 
-<!-- 9장(Docker), 10장(AWS·CI/CD)은 팀원 2·3이 작성합니다. -->
+### 9. Docker 및 컨테이너화 트러블슈팅 [팀원 2, 윤소현]
 
----
+#### 9-1. Python 모듈 실행 경로 및 FastAPI 임포트 에러
+**증상.** `python app/main.py` 형태로 서버를 직접 실행하려 하면 프로젝트 패키지 루트 경로를 인식하지 못해 `ModuleNotFoundError` 또는 상대 경로 임포트 에러가 발생했습니다.
+**해결.** 파이썬 인터프리터의 `-m` 옵션을 활용하여 `python -m uvicorn app.main:app --reload` 방식으로 실행.
+**개념 — 파이썬 모듈 실행과 sys.path.** 스크립트 파일을 직접 실행하면 실행된 파일의 디렉토리가 `sys.path` 최상단에 들어가면서 상위 패키지 모듈 탐색이 깨질 수 있습니다. `-m` 옵션을 사용하면 현재 최상위 루트 작업 디렉토리를 기준(`sys.path`)으로 패키지 구조와 임포트 컨텍스트를 올바르게 유지할 수 있습니다.
+
+#### 9-2. MySQL 연동 의존성 패키지 누락 문제 (`pymysql`)
+**증상.** main 브랜치 병합 후 FastAPI 서버 구동 시 `ModuleNotFoundError: No module named 'pymysql'` 에러와 함께 서버가 정상 실행되지 않았습니다.
+**해결.** 실행 환경에 `pip install pymysql` 명령어로 의존성을 설치하고, `requirements.txt`에 명시하여 실행 환경을 동기화했습니다.
+**개념 — 명시적 의존성 관리.** SQLAlchemy는 다양한 데이터베이스 방언(Dialect)을 지원하며, 내부적으로 DBAPI 드라이버를 불러와 사용합니다. MySQL의 경우 Python 3 호환 순수 파이썬 드라이버인 `pymysql`이 필수적이므로 프로젝트 초기 구성 및 컨테이너화 시 `requirements.txt`에 해당 드라이버 의존성을 반드시 명시해두어야 설치 누락을 방지할 수 있습니다.
+
+#### 9-3. MongoDB Atlas 클라우드 DB 연동 및 전처리 파이프라인 검증
+**증상.** MongoDB Atlas 클라우드 DB 연동 후 `/review/preprocess/imdb` API 호출 시 `404 Not Found ("MongoDB 'crawling_data' 컬렉션에 데이터가 없습니다.")` 에러가 발생했습니다.
+**해결.** MongoDB Compass를 사용해 Atlas Cluster(`cluster0`) 내에 데이터베이스(`ybigta_db`) 및 컬렉션(`crawling_data`)을 생성하고 원본 크롤링 데이터(`reviews_imdb.csv`)를 Import한 후 재요청하여 `200 OK` 응답을 확인했습니다.
+**개념 — 클라우드 데이터 파이프라인 및 보안.** `.env` 파일에 Atlas Connection URI(`MONGO_URL`)를 동적으로 주입하여 로컬/클라우드 DB 환경을 유연하게 전환했습니다. 또한 민감한 접속 정보가 포함된 `.env` 파일 및 캐시 파일이 저장소나 Docker 이미지 빌드 시 유출되지 않도록 `.gitignore`와 `.dockerignore`에 철저히 제외 등록을 마쳤습니다.
+
+------
 
 ## 11. 트러블슈팅 및 개념 정리  ✅ [팀원 1]
 
@@ -567,40 +582,143 @@ def get_db() -> Generator[Session, None, None]:
 (2) 유출 시 되돌릴 수 없습니다. 같은 이유로 CI/CD 에서는 GitHub Secrets, 컨테이너에서는
 환경변수 주입을 씁니다. 한 번 커밋된 비밀값은 히스토리에 남으므로 **되돌리기보다 회전(rotate)** 이 원칙입니다.
 
-<!-- TODO(RDS 연결 후 채우기): 아래는 실제로 마주친 에러만 남기고 나머지는 지울 것 -->
-### 11-7. RDS 연결 시 마주친 문제
+### 11-7. 로컬에서 RDS 에 접속되지 않던 문제 — 보안 그룹이 아니라 "경로"의 문제
 
-- `(2003, "Can't connect to MySQL server on '...'")` → 보안 그룹 인바운드에 3306 이 없거나 소스 IP 불일치
-- `(1045, "Access denied for user ...")` → 계정/비밀번호 불일치
-- `(1049, "Unknown database 'ybigta'")` → RDS 생성 시 초기 DB 이름 미지정 → `CREATE DATABASE ybigta;`
-- 비밀번호에 `@` `:` `/` 가 들어가면 접속 URL 파싱이 깨짐 → `quote_plus()` 로 인코딩 (코드에 반영함)
-- 유휴 커넥션이 끊겨 `MySQL server has gone away` → `create_engine(..., pool_pre_ping=True, pool_recycle=280)`
+**증상.** RDS 엔드포인트를 받아 로컬에서 연결을 시도했으나 인증 단계까지 가지도 못하고
+TCP 연결 자체가 실패했습니다. 처음에는 보안 그룹 인바운드에 내 IP 가 빠진 것으로 의심했습니다.
 
-**개념 — 커넥션 풀.** 요청마다 TCP 연결·인증을 새로 하면 비싸기 때문에 SQLAlchemy 는 커넥션을
+**원인.** 엔드포인트를 DNS 조회해 보니 사설 IP 가 돌아왔습니다.
+
+```
+ybigta-mysql.****.ap-northeast-2.rds.amazonaws.com  →  172.31.34.18
+```
+
+`172.16.0.0/12` 는 사설 대역입니다. 즉 이 RDS 는 **퍼블릭 액세스가 꺼져 있어서**
+VPC 바깥에서는 애초에 도달할 경로가 없는 상태였습니다.
+보안 그룹을 아무리 열어도 달라지지 않습니다.
+
+**해결.** 설정을 되돌리는 대신, **같은 VPC 안의 EC2 에서 테스트**했습니다.
+EC2 사설 IP 가 `172.31.47.56` 로 같은 대역이라 그대로 연결됐고,
+실제 운영 경로(EC2 → RDS)를 그대로 검증하는 셈이라 더 정확한 테스트이기도 했습니다.
+
+**개념 — 퍼블릭 액세스와 보안 그룹은 다른 층위입니다.**
+
+| | 하는 일 | 비유 |
+|---|---|---|
+| 퍼블릭 액세스 | 인터넷에서 오는 **경로 자체**의 존재 여부 | 건물까지 가는 길이 있는가 |
+| 보안 그룹 | 도착한 트래픽을 포트/소스로 **허용·차단** | 건물 입구의 경비 |
+
+길이 없으면 경비를 아무리 통과시켜도 소용이 없습니다.
+"연결이 안 된다" 를 만났을 때 **TCP 도달 → 인증 → 쿼리** 순으로 층을 나눠 확인하면
+어느 층의 문제인지 바로 좁혀집니다. 이번에도 TCP 단계에서 끊긴 덕분에
+계정 정보를 의심하며 시간을 쓰지 않을 수 있었습니다.
+
+**참고 — 커넥션 풀.** 요청마다 TCP 연결·인증을 새로 하면 비싸기 때문에 SQLAlchemy 는 커넥션을
 풀에 보관해 재사용합니다. 그런데 RDS 는 유휴 커넥션을 일정 시간 뒤 끊으므로, 풀에 남아 있던
-"죽은" 커넥션을 그대로 쓰면 위 에러가 납니다. `pool_pre_ping` 은 대여 직전에 가벼운 확인 쿼리를 보내
-죽은 커넥션을 걸러내고, `pool_recycle` 은 일정 시간이 지난 커넥션을 선제적으로 폐기합니다.
+"죽은" 커넥션을 그대로 쓰면 `MySQL server has gone away` 가 납니다. 그래서
+`create_engine(..., pool_pre_ping=True, pool_recycle=280)` 을 걸어 두었습니다.
+`pool_pre_ping` 은 대여 직전에 가벼운 확인 쿼리를 보내 죽은 커넥션을 걸러내고,
+`pool_recycle` 은 일정 시간이 지난 커넥션을 선제적으로 폐기합니다.
 
-### 11-8. Python 모듈 실행 경로 및 FastAPI 임포트 에러 [팀원 2, 윤소현]
+### 11-8. `.env` 를 고쳤는데 서버가 옛날 값을 쓰던 문제
 
-**증상.** `python app/main.py` 형태로 서버를 직접 실행하려 하면 프로젝트 패키지 루트 경로를 인식하지 못해 `ModuleNotFoundError` 또는 상대 경로 임포트 에러가 발생했습니다.
+**증상.** MySQL 비밀번호가 틀려 `(1045, "Access denied")` 가 나길래 `.env` 를 고쳤는데도
+`POST /api/user/register` 가 계속 500 을 반환했습니다. `--reload` 로 띄워 뒀으니
+반영됐을 거라 생각했지만 응답은 그대로였습니다.
 
-**해결.** 파이썬 인터프리터의 `-m` 옵션을 활용하여 `python -m uvicorn app.main:app --reload` 방식으로 실행.
+**원인 추적.** 같은 요청을 in-process `TestClient` 로 보내면 `201` 이 나오는데
+실행 중인 서버로 보내면 `500` 이었습니다. 코드가 아니라 **프로세스의 상태** 차이라는 뜻입니다.
+프로세스 시작 시각과 `.env` 수정 시각을 비교하니 서버가 더 먼저 떠 있었습니다.
 
-**개념 — 파이썬 모듈 실행과 `sys.path`.** 스크립트 파일을 직접 실행하면 실행된 파일의 디렉토리가 `sys.path` 최상단에 들어가면서 상위 패키지 모듈 탐색이 깨질 수 있습니다. `-m` 옵션을 사용하면 현재 최상위 루트 작업 디렉토리를 기준(`sys.path`)으로 패키지 구조와 임포트 컨텍스트를 올바르게 유지할 수 있습니다.
+**원인.** `load_dotenv()` 는 **모듈이 import 될 때 한 번만** 실행되고,
+`uvicorn --reload` 는 `.py` 파일만 감시합니다. `.env` 는 감시 대상이 아니라서
+파일을 고쳐도 이미 떠 있는 프로세스의 `os.environ` 과 생성이 끝난 `engine` 은 옛 값을 그대로 들고 있었습니다.
 
-### 11-9. MySQL 연동 의존성 패키지 누락 문제 (`pymysql`)
+**해결.** 서버를 완전히 재시작. `.env` 변경은 리로드가 아니라 **재기동**이 필요합니다.
 
-**증상.** main 브랜치 병합 후 FastAPI 서버 구동 시 `ModuleNotFoundError: No module named 'pymysql'` 에러와 함께 서버가 정상 실행되지 않았습니다.
+**개념 — 설정은 프로세스 시작 시점에 고정됩니다.** 12-factor 에서 설정을 환경변수로 두는 이유가
+"프로세스 경계에서 한 번 주입하고 그 뒤로는 불변" 이기 때문입니다. 컨테이너에서 환경변수를
+바꾸려면 컨테이너를 다시 만들어야 하는 것도 같은 이유입니다.
+같은 함정을 피하려면 **"설정을 바꿨으면 프로세스를 새로 띄운다"** 를 규칙으로 두는 편이 안전합니다.
 
-**해결.** 실행 환경에 `pip install pymysql` 명령어로 의존성을 설치하고, `requirements.txt`에 명시하여 실행 환경을 동기화했습니다.
+### 11-9. `.gitignore` 는 도커 이미지를 막아 주지 않는다
 
-**개념 — 명시적 의존성 관리.** SQLAlchemy는 다양한 데이터베이스 방언(Dialect)을 지원하며, 내부적으로 DBAPI 드라이버를 불러와 사용합니다. MySQL의 경우 Python 3 호환 순수 파이썬 드라이버인 `pymysql`이 필수적이므로 프로젝트 초기 구성 및 컨테이너화 시 `requirements.txt`에 해당 드라이버 의존성을 반드시 명시해두어야 설치 누락을 방지할 수 있습니다.
+**증상.** `.env` 를 `.gitignore` 에 넣어 뒀으니 안전하다고 생각했는데,
+`Dockerfile` 을 보니 `COPY . .` 였고 `.dockerignore` 가 없었습니다.
+그대로 빌드하면 DB 비밀번호와 RDS 엔드포인트가 든 `.env` 가 **이미지 안에 그대로 들어갑니다.**
+이미지는 Docker Hub 에 public 으로 올라가므로, 누구나 `docker pull` 후 꺼내볼 수 있는 상태였습니다.
 
-### 11-10. MongoDB Atlas 클라우드 DB 연동 및 전처리 파이프라인 검증
+**해결.** `.dockerignore` 를 추가해 `.env`, `.git`, 캐시, 크롤링 로그·프로필을 빌드 컨텍스트에서 제외했습니다.
 
-**증상.** MongoDB Atlas 클라우드 DB 연동 후 `/review/preprocess/imdb` API 호출 시 `404 Not Found ("MongoDB 'crawling_data' 컬렉션에 데이터가 없습니다.")` 에러가 발생했습니다.
+**개념 — 두 파일은 거르는 대상이 다릅니다.**
 
-**해결.** MongoDB Compass를 사용해 Atlas Cluster(`cluster0`) 내에 데이터베이스(`ybigta_db`) 및 컬렉션(`crawling_data`)을 생성하고 원본 크롤링 데이터(`reviews_imdb.csv`)를 Import한 후 재요청하여 `200 OK` 응답을 확인했습니다.
+| 파일 | 무엇을 거르나 |
+|---|---|
+| `.gitignore` | git 이 **커밋**할 대상 |
+| `.dockerignore` | 도커가 **빌드 컨텍스트로 전송**할 대상 |
 
-**개념 — 클라우드 데이터 파이프라인 및 보안.** `.env` 파일에 Atlas Connection URI(`MONGO_URL`)를 동적으로 주입하여 로컬/클라우드 DB 환경을 유연하게 전환했습니다. 또한 민감한 접속 정보가 포함된 `.env` 파일 및 캐시 파일이 저장소나 Docker 이미지 빌드 시 유출되지 않도록 `.gitignore`와 `.dockerignore`에 철저히 제외 등록을 마쳤습니다.
+이름이 비슷해서 하나만 있어도 될 것 같지만, 서로를 대신하지 못합니다.
+확인은 빌드한 이미지에서 직접 하는 게 확실합니다.
+
+```bash
+docker run --rm <image> ls -a /app     # .env 가 보이면 실패
+```
+
+한 번 public 이미지로 올라간 비밀값은 회수할 수 없으므로, `.gitignore` 와 마찬가지로
+**되돌리기보다 회전(rotate)** 이 원칙입니다.
+
+---
+
+## 12. Docker, AWS 배포 및 CI/CD
+
+### 12-1. Docker Hub
+
+- Public repository: [godwmin/ybigta-newbie-team-project](https://hub.docker.com/r/godwmin/ybigta-newbie-team-project)
+- FastAPI 서버를 Docker 이미지로 빌드하고 Docker Hub에 `latest`와 커밋 SHA 태그로 push했습니다.
+- `.dockerignore`에서 `.env`, Git 메타데이터, 캐시, 로그 및 제출용 이미지를 제외해 비밀값 유출과 이미지 용량 증가를 방지했습니다.
+
+### 12-2. AWS EC2 배포 및 API 실행 결과
+
+- Swagger UI: `http://13.125.242.227:8000/docs`
+- EC2의 Ubuntu 환경에 Docker Engine을 설치하고, Docker Hub의 public 이미지를 pull해 `ybigta-app` 컨테이너로 실행했습니다.
+- 배포 후 EC2 내부에서 FastAPI `/docs` 응답 `200`, RDS MySQL `SELECT 1`, MongoDB Atlas `ping` 응답을 각각 확인했습니다.
+
+#### User API
+
+| API | 실행 결과 |
+|---|---|
+| `POST /api/user/register` | ![register API 성공](aws/register.png) |
+| `POST /api/user/login` | ![login API 성공](aws/login.png) |
+| `PUT /api/user/update-password` | ![update password API 성공](aws/update.png) |
+| `DELETE /api/user/delete` | ![delete API 성공](aws/delete.png) |
+
+#### Review preprocessing API
+
+`POST /review/preprocess/{site_name}`
+
+![review preprocess API 성공](aws/review.png)
+
+### 12-3. GitHub Actions CI/CD
+
+`.github/workflows/deploy.yaml`에 다음 두 job을 구성했습니다.
+
+1. **Build and Push Docker Image**: GitHub의 최신 코드로 Docker 이미지를 빌드하고 Docker Hub에 push
+2. **Deploy to EC2**: EC2에 SSH로 접속해 최신 이미지를 pull하고 기존 컨테이너를 교체한 뒤 `/docs` 상태를 확인
+
+Docker Hub 토큰, EC2 SSH 키, RDS 계정 및 Atlas URI는 코드에 작성하지 않고 GitHub Actions Repository Secrets로 주입했습니다.
+
+![GitHub Actions 배포 성공](aws/github_action.png)
+
+### 12-4. RDS 비공개 VPC 보안 구성
+
+MySQL은 Amazon RDS로 호스팅하되 **Public access를 `No`**로 설정해 인터넷에서 DB로 직접 접근하는 경로를 차단했습니다. RDS와 EC2를 같은 VPC에 배치하고, RDS 보안 그룹의 MySQL `3306` 인바운드 소스를 IP 대역이 아닌 **EC2 보안 그룹**으로만 제한했습니다.
+
+이 구성은 EC2의 IP가 변경되어도 보안 그룹 간 참조가 유지되며, FastAPI 컨테이너에서만 RDS의 `users` 테이블을 사용할 수 있습니다.
+
+#### Public access 차단
+
+![RDS public access No](aws/rds_public_access.jpeg)
+
+#### EC2 보안 그룹에만 3306 허용
+
+![RDS security group inbound](aws/rds_security_group.jpeg)
