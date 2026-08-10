@@ -454,9 +454,63 @@ python -m pytest test/test_user_repository.py -v    # 4 passed
 python -m pytest test/ -q                           # 21 passed
 ```
 
+### 8-4. AWS RDS 연동 검증
+
+배포 환경에서는 같은 코드가 `.env` 의 `MYSQL_HOST` 만 RDS 엔드포인트로 바뀝니다.
+**EC2 컨테이너 → RDS(MySQL 8.0)** 경로로 아래를 확인했습니다.
+
+기동 시 `init_db()` 가 RDS 에 `users` 테이블을 생성한 로그:
+
+```
+sqlalchemy.engine.Engine  SELECT DATABASE()
+sqlalchemy.engine.Engine  CREATE TABLE IF NOT EXISTS users (
+    email VARCHAR(255) NOT NULL PRIMARY KEY, ... ) ENGINE=InnoDB ...
+sqlalchemy.engine.Engine  COMMIT
+INFO:     Application startup complete.
+```
+
+이어서 유저 API 전체 흐름을 검증했습니다. **성공 경로뿐 아니라, 변경·삭제가 실제로
+반영됐는지를 "실패해야 하는 요청"으로 함께 확인**했습니다.
+
+| 요청 | 응답 | 확인하려는 것 |
+|---|---|---|
+| `POST /api/user/register` | `201` | RDS 에 INSERT |
+| `POST /api/user/login` | `200` | RDS 에서 SELECT |
+| `PUT /api/user/update-password` | `200` | UPDATE |
+| `POST /api/user/login` (새 비밀번호) | `200` | 변경이 반영됨 |
+| `POST /api/user/login` (옛 비밀번호) | `400` `Invalid ID/PW` | 옛 값이 남아 있지 않음 |
+| `DELETE /api/user/delete` | `200` | DELETE |
+| `POST /api/user/login` (삭제 후) | `400` `User not Found.` | 실제로 지워짐 |
+
+### 8-5. 실행 결과 캡처 (Swagger UI on EC2)
+
+| 엔드포인트 | 캡처 |
+|---|---|
+| `POST /api/user/register` | ![register](aws/register.png) |
+| `POST /api/user/login` | ![login](aws/login.png) |
+| `PUT /api/user/update-password` | ![update-password](aws/update-password.png) |
+| `DELETE /api/user/delete` | ![delete](aws/delete.png) |
+
+### 8-6. RDS 네트워크 구성
+
+RDS 는 **퍼블릭 액세스를 끄고**, 같은 VPC 안의 EC2 에서만 접근하도록 구성했습니다.
+실제로 로컬 PC 에서 엔드포인트를 조회하면 사설 IP 로 해석되어 인터넷 경로가 존재하지 않습니다.
+
+```
+$ nslookup ybigta-mysql.****.ap-northeast-2.rds.amazonaws.com
+  → 172.31.34.18        # 사설 IP (VPC 내부 주소)
+
+$ Test-NetConnection <endpoint> -Port 3306
+  → TcpTestSucceeded : False     # 로컬에서는 도달 불가 (의도된 결과)
+```
+
+EC2 의 사설 IP 는 `172.31.47.56` 로 RDS 와 동일한 VPC 대역에 있어, 컨테이너에서는 정상적으로 연결됩니다.
+자세한 보안 그룹 구성은 10장을 참고하세요.
+
 ---
 
 ### 9. Docker 및 컨테이너화 트러블슈팅 [팀원 2, 윤소현]
+
 
 #### 9-1. Python 모듈 실행 경로 및 FastAPI 임포트 에러
 **증상.** `python app/main.py` 형태로 서버를 직접 실행하려 하면 프로젝트 패키지 루트 경로를 인식하지 못해 `ModuleNotFoundError` 또는 상대 경로 임포트 에러가 발생했습니다.
@@ -474,6 +528,61 @@ python -m pytest test/ -q                           # 21 passed
 **개념 — 클라우드 데이터 파이프라인 및 보안.** `.env` 파일에 Atlas Connection URI(`MONGO_URL`)를 동적으로 주입하여 로컬/클라우드 DB 환경을 유연하게 전환했습니다. 또한 민감한 접속 정보가 포함된 `.env` 파일 및 캐시 파일이 저장소나 Docker 이미지 빌드 시 유출되지 않도록 `.gitignore`와 `.dockerignore`에 철저히 제외 등록을 마쳤습니다.
 
 ------
+
+
+## 10. Docker, AWS 배포 및 CI/CD
+
+### 10-1. Docker Hub
+
+- Public repository: [godwmin/ybigta-newbie-team-project](https://hub.docker.com/r/godwmin/ybigta-newbie-team-project)
+- FastAPI 서버를 Docker 이미지로 빌드하고 Docker Hub에 `latest`와 커밋 SHA 태그로 push했습니다.
+- `.dockerignore`에서 `.env`, Git 메타데이터, 캐시, 로그 및 제출용 이미지를 제외해 비밀값 유출과 이미지 용량 증가를 방지했습니다.
+
+### 10-2. AWS EC2 배포 및 API 실행 결과
+
+- Swagger UI: `http://13.125.242.227:8000/docs`
+- EC2의 Ubuntu 환경에 Docker Engine을 설치하고, Docker Hub의 public 이미지를 pull해 `ybigta-app` 컨테이너로 실행했습니다.
+- 배포 후 EC2 내부에서 FastAPI `/docs` 응답 `200`, RDS MySQL `SELECT 1`, MongoDB Atlas `ping` 응답을 각각 확인했습니다.
+
+#### User API
+
+| API | 실행 결과 |
+|---|---|
+| `POST /api/user/register` | ![register API 성공](aws/register.png) |
+| `POST /api/user/login` | ![login API 성공](aws/login.png) |
+| `PUT /api/user/update-password` | ![update password API 성공](aws/update.png) |
+| `DELETE /api/user/delete` | ![delete API 성공](aws/delete.png) |
+
+#### Review preprocessing API
+
+`POST /review/preprocess/{site_name}`
+
+![review preprocess API 성공](aws/review.png)
+
+### 10-3. GitHub Actions CI/CD
+
+`.github/workflows/deploy.yaml`에 다음 두 job을 구성했습니다.
+
+1. **Build and Push Docker Image**: GitHub의 최신 코드로 Docker 이미지를 빌드하고 Docker Hub에 push
+2. **Deploy to EC2**: EC2에 SSH로 접속해 최신 이미지를 pull하고 기존 컨테이너를 교체한 뒤 `/docs` 상태를 확인
+
+Docker Hub 토큰, EC2 SSH 키, RDS 계정 및 Atlas URI는 코드에 작성하지 않고 GitHub Actions Repository Secrets로 주입했습니다.
+
+![GitHub Actions 배포 성공](aws/github_action.png)
+
+### 10-4. RDS 비공개 VPC 보안 구성
+
+MySQL은 Amazon RDS로 호스팅하되 **Public access를 `No`**로 설정해 인터넷에서 DB로 직접 접근하는 경로를 차단했습니다. RDS와 EC2를 같은 VPC에 배치하고, RDS 보안 그룹의 MySQL `3306` 인바운드 소스를 IP 대역이 아닌 **EC2 보안 그룹**으로만 제한했습니다.
+
+이 구성은 EC2의 IP가 변경되어도 보안 그룹 간 참조가 유지되며, FastAPI 컨테이너에서만 RDS의 `users` 테이블을 사용할 수 있습니다.
+
+#### Public access 차단
+
+![RDS public access No](aws/rds_public_access.jpeg)
+
+#### EC2 보안 그룹에만 3306 허용
+
+![RDS security group inbound](aws/rds_security_group.jpeg)
 
 ## 11. 트러블슈팅 및 개념 정리  ✅ [팀원 1]
 
@@ -666,59 +775,3 @@ docker run --rm <image> ls -a /app     # .env 가 보이면 실패
 
 한 번 public 이미지로 올라간 비밀값은 회수할 수 없으므로, `.gitignore` 와 마찬가지로
 **되돌리기보다 회전(rotate)** 이 원칙입니다.
-
----
-
-## 12. Docker, AWS 배포 및 CI/CD
-
-### 12-1. Docker Hub
-
-- Public repository: [godwmin/ybigta-newbie-team-project](https://hub.docker.com/r/godwmin/ybigta-newbie-team-project)
-- FastAPI 서버를 Docker 이미지로 빌드하고 Docker Hub에 `latest`와 커밋 SHA 태그로 push했습니다.
-- `.dockerignore`에서 `.env`, Git 메타데이터, 캐시, 로그 및 제출용 이미지를 제외해 비밀값 유출과 이미지 용량 증가를 방지했습니다.
-
-### 12-2. AWS EC2 배포 및 API 실행 결과
-
-- Swagger UI: `http://13.125.242.227:8000/docs`
-- EC2의 Ubuntu 환경에 Docker Engine을 설치하고, Docker Hub의 public 이미지를 pull해 `ybigta-app` 컨테이너로 실행했습니다.
-- 배포 후 EC2 내부에서 FastAPI `/docs` 응답 `200`, RDS MySQL `SELECT 1`, MongoDB Atlas `ping` 응답을 각각 확인했습니다.
-
-#### User API
-
-| API | 실행 결과 |
-|---|---|
-| `POST /api/user/register` | ![register API 성공](aws/register.png) |
-| `POST /api/user/login` | ![login API 성공](aws/login.png) |
-| `PUT /api/user/update-password` | ![update password API 성공](aws/update.png) |
-| `DELETE /api/user/delete` | ![delete API 성공](aws/delete.png) |
-
-#### Review preprocessing API
-
-`POST /review/preprocess/{site_name}`
-
-![review preprocess API 성공](aws/review.png)
-
-### 12-3. GitHub Actions CI/CD
-
-`.github/workflows/deploy.yaml`에 다음 두 job을 구성했습니다.
-
-1. **Build and Push Docker Image**: GitHub의 최신 코드로 Docker 이미지를 빌드하고 Docker Hub에 push
-2. **Deploy to EC2**: EC2에 SSH로 접속해 최신 이미지를 pull하고 기존 컨테이너를 교체한 뒤 `/docs` 상태를 확인
-
-Docker Hub 토큰, EC2 SSH 키, RDS 계정 및 Atlas URI는 코드에 작성하지 않고 GitHub Actions Repository Secrets로 주입했습니다.
-
-![GitHub Actions 배포 성공](aws/github_action.png)
-
-### 12-4. RDS 비공개 VPC 보안 구성
-
-MySQL은 Amazon RDS로 호스팅하되 **Public access를 `No`**로 설정해 인터넷에서 DB로 직접 접근하는 경로를 차단했습니다. RDS와 EC2를 같은 VPC에 배치하고, RDS 보안 그룹의 MySQL `3306` 인바운드 소스를 IP 대역이 아닌 **EC2 보안 그룹**으로만 제한했습니다.
-
-이 구성은 EC2의 IP가 변경되어도 보안 그룹 간 참조가 유지되며, FastAPI 컨테이너에서만 RDS의 `users` 테이블을 사용할 수 있습니다.
-
-#### Public access 차단
-
-![RDS public access No](aws/rds_public_access.jpeg)
-
-#### EC2 보안 그룹에만 3306 허용
-
-![RDS security group inbound](aws/rds_security_group.jpeg)
