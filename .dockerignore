@@ -1,0 +1,31 @@
+# Secrets
+.env
+.env.*
+
+# Git and repository metadata
+.git
+.github
+.gitignore
+.Rhistory
+.DS_Store
+
+# Python caches and local environments
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+
+# Node / Next.js local outputs
+node_modules/
+.next/
+
+# Local documents and submission screenshots
+*.pdf
+aws/*.png
+aws/*.jpeg
+
+# Files unnecessary for the runtime image
+README.md
