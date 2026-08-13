@@ -1,0 +1,27 @@
+# ---------------------------------------------------------------------------
+# Collector 자동 수집 스케줄 (EC2 / cron)
+#
+# 설치:
+#   sudo install -m 755 infra/scheduler/run_collector.sh /opt/mcp/run_collector.sh
+#   crontab -e            # ubuntu 유저로 실행 (docker 그룹에 속해 있어야 함)
+#   아래 내용을 붙여넣고 저장
+#
+# 확인:
+#   crontab -l                       # 등록 확인  -> 캡처 대상
+#   tail -f /var/log/ybigta/collector.log
+#
+# 주기를 바꾸고 싶다면 (분 시 일 월 요일)
+#   */10 * * * *   10분마다
+#   0    * * * *   매시 정각
+#   0 */6 * * *    6시간마다
+# ---------------------------------------------------------------------------
+
+# cron은 로그인 셸이 아니므로 PATH를 명시한다 (docker를 못 찾는 사고가 잦다)
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+SHELL=/bin/bash
+
+# 30분마다 외부 데이터 수집 -> RDS 적재
+*/30 * * * * /opt/mcp/run_collector.sh >> /var/log/ybigta/cron.log 2>&1
+
+# (선택) 매일 04:00 컨테이너 이미지 정리 — 디스크 부족 방지
+0 4 * * * /usr/bin/docker image prune -af --filter "until=168h" >> /var/log/ybigta/cron.log 2>&1
