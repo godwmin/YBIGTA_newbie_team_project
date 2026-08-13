@@ -16,6 +16,8 @@ GRANT INSERT ON crypto_db.coin_prices TO 'collector_user'@'%';
 -- MCP Server는 조회만 가능하고 INSERT/UPDATE/DELETE는 할 수 없습니다.
 GRANT SELECT ON crypto_db.coin_prices TO 'mcp_user'@'%';
 
+FLUSH PRIVILEGES;
+
 -- 권한 확인
 SHOW GRANTS FOR 'collector_user'@'%';
 SHOW GRANTS FOR 'mcp_user'@'%';

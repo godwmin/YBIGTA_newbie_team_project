@@ -1,9 +1,8 @@
-name: Build and Deploy
+name: Test, Build and Deploy
 
 on:
   push:
-    branches:
-      - main
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -14,152 +13,166 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build-and-push:
-    name: Build and Push Docker Image
+  test:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Check out repository
-        uses: actions/checkout@v6
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+          cache: pip
+      - name: Test Python services
+        run: |
+          python -m pip install -r mcp_server/requirements-dev.txt -r collector/requirements.txt
+          pytest mcp_server/tests collector/tests
+          ruff check mcp_server collector
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Check Next.js
+        working-directory: web
+        run: |
+          npm ci
+          npm run lint
+          npm run build
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v4
-
-      - name: Log in to Docker Hub
-        uses: docker/login-action@v4
+  build-and-push:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
-
-      - name: Build and push Docker image
+      - name: Build and push MCP server
         uses: docker/build-push-action@v7
         with:
-          context: ./YBIGTA_newbie_team_project
-          file: ./YBIGTA_newbie_team_project/Dockerfile
+          context: .
+          file: ./Dockerfile
           push: true
           tags: |
-            ${{ secrets.DOCKERHUB_REPOSITORY }}:latest
-            ${{ secrets.DOCKERHUB_REPOSITORY }}:${{ github.sha }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+            ${{ secrets.DOCKERHUB_REPOSITORY }}:mcp-${{ github.sha }}
+            ${{ secrets.DOCKERHUB_REPOSITORY }}:mcp-latest
+          cache-from: type=gha,scope=mcp
+          cache-to: type=gha,mode=max,scope=mcp
+      - name: Build and push Collector
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: ./collector/Dockerfile
+          push: true
+          tags: |
+            ${{ secrets.DOCKERHUB_REPOSITORY }}:collector-${{ github.sha }}
+            ${{ secrets.DOCKERHUB_REPOSITORY }}:collector-latest
+          cache-from: type=gha,scope=collector
+          cache-to: type=gha,mode=max,scope=collector
 
   deploy-to-ec2:
-    name: Deploy to EC2
     needs: build-and-push
     runs-on: ubuntu-latest
-
     steps:
+      - uses: actions/checkout@v6
       - name: Validate deployment secrets
         env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+          DOCKERHUB_REPOSITORY: ${{ secrets.DOCKERHUB_REPOSITORY }}
           EC2_HOST: ${{ secrets.EC2_HOST }}
           EC2_USERNAME: ${{ secrets.EC2_USERNAME }}
           EC2_SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
-          MYSQL_USER: ${{ secrets.MYSQL_USER }}
-          MYSQL_PASSWORD: ${{ secrets.MYSQL_PASSWORD }}
-          MYSQL_HOST: ${{ secrets.MYSQL_HOST }}
-          MYSQL_PORT: ${{ secrets.MYSQL_PORT }}
-          MYSQL_DATABASE: ${{ secrets.MYSQL_DATABASE }}
-          MONGO_URL: ${{ secrets.MONGO_URL }}
-        shell: bash
+          EC2_KNOWN_HOSTS: ${{ secrets.EC2_KNOWN_HOSTS }}
+          DB_HOST: ${{ secrets.DB_HOST }}
+          DB_PORT: ${{ secrets.DB_PORT }}
+          DB_NAME: ${{ secrets.DB_NAME }}
+          MCP_DB_USER: ${{ secrets.MCP_DB_USER }}
+          MCP_DB_PASSWORD: ${{ secrets.MCP_DB_PASSWORD }}
+          COLLECTOR_DB_USER: ${{ secrets.COLLECTOR_DB_USER }}
+          COLLECTOR_DB_PASSWORD: ${{ secrets.COLLECTOR_DB_PASSWORD }}
+          MCP_AUTH_TOKEN: ${{ secrets.MCP_AUTH_TOKEN }}
         run: |
           set -euo pipefail
-
-          required=(
-            EC2_HOST
-            EC2_USERNAME
-            EC2_SSH_KEY
-            MYSQL_USER
-            MYSQL_PASSWORD
-            MYSQL_HOST
-            MYSQL_PORT
-            MYSQL_DATABASE
-            MONGO_URL
-          )
-
+          required=(DOCKERHUB_USERNAME DOCKERHUB_TOKEN DOCKERHUB_REPOSITORY EC2_HOST EC2_USERNAME EC2_SSH_KEY EC2_KNOWN_HOSTS DB_HOST DB_PORT DB_NAME MCP_DB_USER MCP_DB_PASSWORD COLLECTOR_DB_USER COLLECTOR_DB_PASSWORD MCP_AUTH_TOKEN)
           for name in "${required[@]}"; do
-            if [[ -z "${!name}" ]]; then
-              echo "Required GitHub Secret is missing: ${name}" >&2
-              exit 1
-            fi
+            test -n "${!name}" || { echo "Missing GitHub Secret: $name" >&2; exit 1; }
           done
-
-      - name: Configure SSH
+      - name: Configure SSH and runtime files
         env:
           EC2_HOST: ${{ secrets.EC2_HOST }}
           EC2_SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
-        shell: bash
+          EC2_KNOWN_HOSTS: ${{ secrets.EC2_KNOWN_HOSTS }}
+          DB_HOST: ${{ secrets.DB_HOST }}
+          DB_PORT: ${{ secrets.DB_PORT }}
+          DB_NAME: ${{ secrets.DB_NAME }}
+          MCP_DB_USER: ${{ secrets.MCP_DB_USER }}
+          MCP_DB_PASSWORD: ${{ secrets.MCP_DB_PASSWORD }}
+          COLLECTOR_DB_USER: ${{ secrets.COLLECTOR_DB_USER }}
+          COLLECTOR_DB_PASSWORD: ${{ secrets.COLLECTOR_DB_PASSWORD }}
+          MCP_AUTH_TOKEN: ${{ secrets.MCP_AUTH_TOKEN }}
         run: |
           set -euo pipefail
           install -m 700 -d "$HOME/.ssh"
           printf '%s\n' "$EC2_SSH_KEY" > "$HOME/.ssh/ec2_key"
           chmod 600 "$HOME/.ssh/ec2_key"
-          ssh-keyscan -H "$EC2_HOST" >> "$HOME/.ssh/known_hosts"
-
-      - name: Create runtime environment file
-        env:
-          MYSQL_USER: ${{ secrets.MYSQL_USER }}
-          MYSQL_PASSWORD: ${{ secrets.MYSQL_PASSWORD }}
-          MYSQL_HOST: ${{ secrets.MYSQL_HOST }}
-          MYSQL_PORT: ${{ secrets.MYSQL_PORT }}
-          MYSQL_DATABASE: ${{ secrets.MYSQL_DATABASE }}
-          MONGO_URL: ${{ secrets.MONGO_URL }}
-        shell: bash
-        run: |
-          set -euo pipefail
+          printf '%s\n' "$EC2_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/known_hosts"
           umask 077
-          {
-            printf 'MYSQL_USER=%s\n' "$MYSQL_USER"
-            printf 'MYSQL_PASSWORD=%s\n' "$MYSQL_PASSWORD"
-            printf 'MYSQL_HOST=%s\n' "$MYSQL_HOST"
-            printf 'MYSQL_PORT=%s\n' "$MYSQL_PORT"
-            printf 'MYSQL_DATABASE=%s\n' "$MYSQL_DATABASE"
-            printf 'MONGO_URL=%s\n' "$MONGO_URL"
-          } > "$RUNNER_TEMP/app.env"
-
-      - name: Copy environment file to EC2
+          printf 'DB_HOST=%s\nDB_PORT=%s\nDB_NAME=%s\nMCP_DB_USER=%s\nMCP_DB_PASSWORD=%s\nMCP_AUTH_TOKEN=%s\nMCP_HOST=0.0.0.0\nMCP_PORT=8000\n' "$DB_HOST" "$DB_PORT" "$DB_NAME" "$MCP_DB_USER" "$MCP_DB_PASSWORD" "$MCP_AUTH_TOKEN" > "$RUNNER_TEMP/mcp.env"
+          printf 'DB_HOST=%s\nDB_PORT=%s\nDB_NAME=%s\nCOLLECTOR_DB_USER=%s\nCOLLECTOR_DB_PASSWORD=%s\n' "$DB_HOST" "$DB_PORT" "$DB_NAME" "$COLLECTOR_DB_USER" "$COLLECTOR_DB_PASSWORD" > "$RUNNER_TEMP/collector.env"
+      - name: Copy deployment files
         env:
           EC2_HOST: ${{ secrets.EC2_HOST }}
           EC2_USERNAME: ${{ secrets.EC2_USERNAME }}
-        shell: bash
         run: |
           set -euo pipefail
-          ssh -i "$HOME/.ssh/ec2_key" "$EC2_USERNAME@$EC2_HOST" \
-            'mkdir -p "$HOME/ybigta" && chmod 700 "$HOME/ybigta"'
-          scp -i "$HOME/.ssh/ec2_key" "$RUNNER_TEMP/app.env" \
-            "$EC2_USERNAME@$EC2_HOST:ybigta/.env"
-
-      - name: Pull image and restart container
+          ssh -i "$HOME/.ssh/ec2_key" "$EC2_USERNAME@$EC2_HOST" 'install -m 700 -d "$HOME/ybigta"'
+          scp -i "$HOME/.ssh/ec2_key" "$RUNNER_TEMP/mcp.env" "$EC2_USERNAME@$EC2_HOST:ybigta/.env"
+          scp -i "$HOME/.ssh/ec2_key" "$RUNNER_TEMP/collector.env" "$EC2_USERNAME@$EC2_HOST:ybigta/collector.env"
+          scp -i "$HOME/.ssh/ec2_key" infra/nginx/mcp.conf infra/cron/collector.cron infra/scripts/run-collector.sh "$EC2_USERNAME@$EC2_HOST:ybigta/"
+      - name: Deploy immutable images
         env:
           EC2_HOST: ${{ secrets.EC2_HOST }}
           EC2_USERNAME: ${{ secrets.EC2_USERNAME }}
-          IMAGE_REF: ${{ secrets.DOCKERHUB_REPOSITORY }}:latest
-        shell: bash
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+          MCP_IMAGE: ${{ secrets.DOCKERHUB_REPOSITORY }}:mcp-${{ github.sha }}
+          COLLECTOR_IMAGE: ${{ secrets.DOCKERHUB_REPOSITORY }}:collector-${{ github.sha }}
         run: |
           set -euo pipefail
-          ssh -i "$HOME/.ssh/ec2_key" "$EC2_USERNAME@$EC2_HOST" \
-            "bash -s -- '$IMAGE_REF'" <<'REMOTE'
+          printf '%s' "$DOCKERHUB_TOKEN" | ssh -i "$HOME/.ssh/ec2_key" "$EC2_USERNAME@$EC2_HOST" "docker login -u '$DOCKERHUB_USERNAME' --password-stdin"
+          ssh -i "$HOME/.ssh/ec2_key" "$EC2_USERNAME@$EC2_HOST" "bash -s -- '$MCP_IMAGE' '$COLLECTOR_IMAGE'" <<'REMOTE'
           set -euo pipefail
-
-          image_ref="$1"
+          mcp_image="$1"
+          collector_image="$2"
           app_dir="$HOME/ybigta"
-          container_name="ybigta-app"
+          container="ybigta-mcp"
+          previous_image="$(docker inspect --format '{{.Config.Image}}' "$container" 2>/dev/null || true)"
 
-          chmod 600 "$app_dir/.env"
-          sudo docker pull "$image_ref"
-          sudo docker rm -f "$container_name" 2>/dev/null || true
-          sudo docker run -d \
-            --name "$container_name" \
-            --restart unless-stopped \
-            --env-file "$app_dir/.env" \
-            -p 8000:8000 \
-            "$image_ref"
+          chmod 600 "$app_dir/.env" "$app_dir/collector.env"
+          chmod 700 "$app_dir/run-collector.sh"
+          docker pull "$mcp_image"
+          docker pull "$collector_image"
+          docker rm -f "$container" 2>/dev/null || true
+          docker run -d --name "$container" --restart unless-stopped \
+            --env-file "$app_dir/.env" -p 127.0.0.1:8000:8000 "$mcp_image"
 
-          sleep 10
-          if ! sudo docker exec "$container_name" python -c \
-            "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/docs', timeout=5)"; then
-            sudo docker logs "$container_name"
+          if ! timeout 40 bash -c 'until curl -fsS http://127.0.0.1:8000/health; do sleep 2; done'; then
+            docker logs "$container" || true
+            docker rm -f "$container" || true
+            if [[ -n "$previous_image" ]]; then
+              docker run -d --name "$container" --restart unless-stopped \
+                --env-file "$app_dir/.env" -p 127.0.0.1:8000:8000 "$previous_image"
+            fi
             exit 1
           fi
 
-          sudo docker image prune -f
+          printf '%s\n' "$collector_image" > "$app_dir/collector-image"
+          { crontab -l 2>/dev/null | grep -v 'ybigta-collector.lock' || true; sed "s|__APP_HOME__|$app_dir|g" "$app_dir/collector.cron"; } | crontab -
+          sudo install -m 644 "$app_dir/mcp.conf" /etc/nginx/conf.d/mcp.conf
+          sudo nginx -t
+          sudo systemctl reload nginx
+          docker image prune -f
           REMOTE

@@ -9,6 +9,12 @@ interface Message {
   content: string;
 }
 
+interface ChatResponse {
+  content?: string;
+  error?: string;
+  toolCalls?: string[];
+}
+
 export default function Home() {
   const [input, setInput] = useState('');
   const [messages, setMessages] = useState<Message[]>([
@@ -36,15 +42,22 @@ export default function Home() {
         body: JSON.stringify({ messages: [...messages, userMessage] }),
       });
 
-      const data = await res.json();
+      const data = (await res.json()) as ChatResponse;
+      if (!res.ok) throw new Error(data.error || `요청 실패 (${res.status})`);
       const botMessage: Message = {
         id: (Date.now() + 1).toString(),
         role: 'assistant',
-        content: data.content || '응답을 받아오지 못했습니다.',
+        content: `${data.content || '응답을 받아오지 못했습니다.'}${
+          data.toolCalls?.length ? `\n\n사용한 도구: ${[...new Set(data.toolCalls)].join(', ')}` : ''
+        }`,
       };
       setMessages((prev) => [...prev, botMessage]);
-    } catch (err) {
-      console.error(err);
+    } catch (error) {
+      const content = error instanceof Error ? error.message : '서버에 연결하지 못했습니다.';
+      setMessages((prev) => [
+        ...prev,
+        { id: `${Date.now()}-error`, role: 'assistant', content: `오류: ${content}` },
+      ]);
     } finally {
       setLoading(false);
     }
@@ -86,8 +99,8 @@ export default function Home() {
         />
         <button
           type="submit"
-          disabled={loading}
-          className="px-5 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 flex items-center gap-1 font-semibold"
+          disabled={loading || !input.trim()}
+          className="px-5 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50 flex items-center gap-1 font-semibold"
         >
           <Send className="w-4 h-4" /> 전송
         </button>

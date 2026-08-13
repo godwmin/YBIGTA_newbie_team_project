@@ -27,7 +27,7 @@ Python 3.10 이상이 필요합니다.
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -r mcp_server/requirements.txt
+pip install -r mcp_server/requirements-dev.txt
 cp .env.example .env
 ```
 
