@@ -775,3 +775,116 @@ docker run --rm <image> ls -a /app     # .env 가 보이면 실패
 
 한 번 public 이미지로 올라간 비밀값은 회수할 수 없으므로, `.gitignore` 와 마찬가지로
 **되돌리기보다 회전(rotate)** 이 원칙입니다.
+
+---
+
+## 12. AI Agent 과제 — MCP Server 및 DB 보안 [팀원 1]
+
+### 12-1. 담당 범위
+
+팀원 1은 Upbit 코인 시세가 저장된 MySQL `coin_prices` 테이블을 안전하게 조회하는 MCP Server를 구현했습니다.
+
+- MCP Server `tools → services → repositories` 3계층 구조
+- MCP Tool 3개와 입력·조회 제한
+- Bearer Token 인증
+- MySQL `coin_prices` 스키마
+- Collector/MCP 계정 분리와 `mcp_user` read-only 권한
+
+### 12-2. MCP Server 3계층 구조
+
+```text
+Next.js Agent
+      |
+      | MCP Streamable HTTP + Bearer Token
+      v
+mcp_server/tools
+      |  MCP Tool 이름, 입력 Schema, 오류 응답
+      v
+mcp_server/services
+      |  symbol 정규화, limit/hours 검증, 응답 변환
+      v
+mcp_server/repositories
+      |  파라미터 바인딩된 read-only SELECT
+      v
+AWS RDS MySQL (crypto_db.coin_prices)
+```
+
+| 계층 | 주요 역할 | 확장 방법 |
+|---|---|---|
+| `tools/` | MCP Tool 등록, JSON Schema, 안전한 응답 | Tool이 추가되면 호출 진입점만 추가 |
+| `services/` | 입력 검증과 비즈니스 규칙 | 조회 제한·응답 규칙 변경 시 수정 |
+| `repositories/` | MySQL 연결과 SQL 실행 | DB 스키마·쿼리 변경 시 수정 |
+
+Tool이 SQL을 직접 실행하지 않기 때문에 DB 스키마, 비즈니스 규칙, MCP 인터페이스를 서로 독립적으로 변경할 수 있습니다.
+
+### 12-3. MCP Tools
+
+| Tool | 입력 | 제한 | 설명 |
+|---|---|---|---|
+| `get_latest_price` | `symbol` | `KRW-BTC` 형식 | 특정 코인의 가장 최근 수집 시세 |
+| `get_top_gainers` | `limit` | 1~20 | 코인별 최신 시세 기준 상승률 상위 N개 |
+| `get_price_history` | `symbol`, `hours` | 1~168시간, 최대 500행 | 특정 코인의 최근 N시간 시세 내역 |
+
+`change_rate`는 Upbit에서 받은 변동률 비율입니다. 예를 들어 `0.0325`는 3.25%이며, Agent가 바로 사용할 수 있도록 `change_rate_percent`도 함께 반환합니다.
+
+### 12-4. DB 스키마와 계정 보안
+
+```sql
+CREATE TABLE coin_prices (
+    id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    symbol VARCHAR(20) NOT NULL,
+    price DECIMAL(18, 4) NOT NULL,
+    change_rate FLOAT NOT NULL,
+    collected_at DATETIME(6) NOT NULL,
+    created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
+);
+```
+
+DB 계정은 역할에 따라 분리했습니다.
+
+| DB 계정 | 권한 | 용도 |
+|---|---|---|
+| `collector_user` | `INSERT` | Collector가 수집 데이터 저장 |
+| `mcp_user` | `SELECT` | MCP Server가 시세 조회 |
+
+MCP Server 코드는 고정된 `SELECT` 쿼리와 PyMySQL 파라미터 바인딩을 사용합니다. 따라서 사용자 입력이 SQL 문법으로 해석되지 않으며, DB 계정 자체도 데이터를 추가·수정·삭제할 수 없습니다.
+
+### 12-5. MCP 인증과 Secret 관리
+
+MCP Server의 `/mcp` 엔드포인트는 모든 요청에 다음 헤더를 요구합니다.
+
+```http
+Authorization: Bearer <MCP_AUTH_TOKEN>
+```
+
+Token은 환경변수에서만 읽고 constant-time 비교로 검증합니다. `MCP_AUTH_TOKEN`, `MCP_DB_PASSWORD`는 `.env` 또는 배포 환경의 Secret으로 주입하며 Git에 커밋하지 않습니다. Next.js에서도 Server-side Route Handler만 Token을 사용하고 `NEXT_PUBLIC_` 환경변수를 사용하지 않습니다.
+
+### 12-6. 로컬 실행과 테스트
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r mcp_server/requirements.txt
+cp .env.example .env
+python -m mcp_server.server
+```
+
+기본 MCP URL은 `http://localhost:8000/mcp`입니다. Nginx/EC2 health check는 인증이 필요 없는 `GET /health`를 사용합니다.
+
+```bash
+pytest mcp_server/tests
+```
+
+MCP 단위 테스는 Bearer Token, symbol 검증, `limit`/`hours` 제한, SQL 파라미터 바인딩, Tool 등록을 포함하며 총 17개가 통과했습니다.
+
+### 12-7. MCP 실행 결과
+
+#### MCP Tool 목록과 입력 Schema
+
+![MCP Tool 목록](docs/images/mcp_tools.png)
+
+#### MCP Tool 호출 결과
+
+![MCP Tool 호출](docs/images/mcp_call.png)
+
+세부 실행 방법과 팀 연동 규칙은 [`mcp_server/README.md`](mcp_server/README.md)와 [`mcp_server/TEAM_HANDOFF.md`](mcp_server/TEAM_HANDOFF.md)를 참고합니다.
