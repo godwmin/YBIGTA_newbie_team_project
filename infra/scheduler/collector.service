@@ -1,0 +1,17 @@
+# /etc/systemd/system/collector.service
+#
+# collector.timer가 주기적으로 호출하는 일회성(oneshot) 유닛.
+# 실제 실행 로직은 run_collector.sh 안에 있다 (flock + 로깅).
+
+[Unit]
+Description=YBIGTA 외부 데이터 수집 1회 실행
+After=docker.service network-online.target
+Requires=docker.service
+
+[Service]
+Type=oneshot
+User=ubuntu
+ExecStart=/opt/mcp/run_collector.sh
+
+# 수집이 비정상적으로 오래 걸리면 강제 종료 (다음 주기를 막지 않도록)
+TimeoutStartSec=20min

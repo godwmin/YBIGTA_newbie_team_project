@@ -1,0 +1,48 @@
+# /etc/systemd/system/mcp-server.service
+#
+# MCP Server를 Docker 컨테이너로 상시 구동한다.
+#
+# 설치:
+#   sudo cp infra/ec2/systemd/mcp-server.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now mcp-server
+#
+# 필요한 파일 2개 (둘 다 .gitignore 대상, EC2 안에만 존재):
+#   /opt/mcp/image.env : MCP_IMAGE=<도커허브계정>/ybigta-mcp:latest
+#   /opt/mcp/.env      : MCP_AUTH_TOKEN=... / DATABASE_URL=mysql+pymysql://mcp_user:...
+#
+# 상태 확인:  systemctl status mcp-server
+# 로그 확인:  docker logs -f mcp-server   또는   journalctl -u mcp-server -f
+
+[Unit]
+Description=YBIGTA MCP Server (Docker)
+After=docker.service network-online.target
+Requires=docker.service
+
+[Service]
+Type=simple
+Restart=always
+RestartSec=5
+
+EnvironmentFile=/opt/mcp/image.env
+
+# 이전 컨테이너가 남아 있으면 정리 (실패해도 무시)
+ExecStartPre=-/usr/bin/docker rm -f mcp-server
+ExecStartPre=/usr/bin/docker pull ${MCP_IMAGE}
+
+# -p 127.0.0.1:8000:8000 이 핵심이다.
+#   0.0.0.0:8000 으로 바인딩하면 Docker가 iptables에 DNAT 규칙을 넣어
+#   Security Group 설정과 무관하게 포트가 외부로 뚫릴 수 있다.
+#   루프백에만 바인딩하고, 외부 진입점은 Nginx(80) 하나로 고정한다.
+ExecStart=/usr/bin/docker run --rm --name mcp-server \
+    -p 127.0.0.1:8000:8000 \
+    --env-file /opt/mcp/.env \
+    --read-only --tmpfs /tmp \
+    --security-opt no-new-privileges \
+    --memory 512m --cpus 1 \
+    ${MCP_IMAGE}
+
+ExecStop=/usr/bin/docker stop mcp-server
+
+[Install]
+WantedBy=multi-user.target
