@@ -864,7 +864,7 @@ Token은 환경변수에서만 읽고 constant-time 비교로 검증합니다. `
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -r mcp_server/requirements.txt
+pip install -r mcp_server/requirements-dev.txt
 cp .env.example .env
 python -m mcp_server.server
 ```
@@ -888,3 +888,96 @@ MCP 단위 테스는 Bearer Token, symbol 검증, `limit`/`hours` 제한, SQL �
 ![MCP Tool 호출](docs/images/mcp_call.png)
 
 세부 실행 방법과 팀 연동 규칙은 [`mcp_server/README.md`](mcp_server/README.md)와 [`mcp_server/TEAM_HANDOFF.md`](mcp_server/TEAM_HANDOFF.md)를 참고합니다.
+
+---
+
+## 13. AI Agent 과제 — Data Pipeline 및 Vercel Agent [팀원 2]
+
+### 13-1. Data Pipeline
+
+```text
+Upbit Public API
+  → collector/main.py (timeout·응답 검증)
+  → collector_user / INSERT only
+  → coin_prices(collected_at=UTC 수집 시각, created_at=DB 저장 시각)
+  → mcp_user / SELECT only
+  → MCP Tools
+  → Next.js /api/chat
+  → OpenAI Agent
+```
+
+Collector는 API 요청이나 DB 저장이 실패하면 오류를 숨기지 않고 non-zero exit code로 종료하므로 cron과 CI에서 실패를 식별할 수 있습니다. 한 수집 batch는 `executemany`와 하나의 transaction으로 저장하며 오류 시 rollback합니다.
+
+로컬 1회 실행은 다음과 같습니다.
+
+```bash
+docker compose -f compose.local.yml --profile collect run --rm collector
+```
+
+### 13-2. Next.js Agent 보안 구조
+
+브라우저는 `/api/chat`만 호출합니다. Server-side Route Handler가 `OPENAI_API_KEY`, `MCP_AUTH_TOKEN`, `MCP_SERVER_URL`을 읽어 실제 MCP Streamable HTTP 연결과 LLM Tool Calling을 수행합니다. 이 값들은 `NEXT_PUBLIC_` 접두사를 사용하지 않으므로 client bundle에 포함되지 않습니다.
+
+Agent는 MCP Server의 `tools/list` 결과에서 Tool 이름·설명·입력 Schema를 동적으로 받아 모델에 제공합니다. 따라서 새로운 MCP Tool을 추가할 때 웹의 키워드 분기문이나 가짜 REST 경로를 수정할 필요가 없습니다.
+
+```bash
+cd web
+npm ci
+npm run dev
+```
+
+Vercel Project Settings에는 `OPENAI_API_KEY`, `OPENAI_MODEL`, `MCP_SERVER_URL`, `MCP_AUTH_TOKEN`을 Server-side 환경변수로 등록합니다.
+
+질문 예시는 다음과 같습니다.
+
+- `KRW-BTC 최신 시세와 전일 대비 변동률을 알려줘.`
+- `현재 상승률 상위 3개 코인을 비교해줘.`
+- `KRW-ETH의 최근 12시간 가격 흐름을 요약해줘.`
+
+### 13-3. 팀원 2 제출 캡처
+
+- `data_update.png`: Collector 실행 전후 DB 행과 `collected_at`, `created_at`
+- `agent_query.png`: 질문과 MCP Tool이 표시된 Chat UI
+- `agent_analysis.png`: MCP 조회값을 근거로 만든 분석 답변
+
+---
+
+## 14. AI Agent 과제 — AWS 인프라 및 배포 [팀원 3]
+
+### 14-1. Architecture
+
+```mermaid
+flowchart LR
+    Browser[Browser] --> Vercel[Vercel Next.js]
+    Vercel -->|HTTPS + Bearer| Nginx
+    subgraph AWS_VPC[AWS VPC]
+      subgraph Public_Subnet[Public Subnet]
+        Nginx[Nginx :80/443] -->|localhost| MCP[MCP :8000]
+        Cron[cron / 10분] --> Collector[Collector]
+      end
+      subgraph Private_Subnet[Private Subnet]
+        MCP -->|SELECT / mcp_user| RDS[(RDS MySQL)]
+        Collector -->|INSERT / collector_user| RDS
+      end
+    end
+    Upbit[Upbit Public API] --> Collector
+```
+
+- EC2는 Public Subnet, RDS는 Private Subnet의 DB Subnet Group에 둡니다.
+- RDS Public Access는 `OFF`이고 `rds-sg:3306` inbound source는 `mcp-sg`만 허용합니다.
+- MCP 컨테이너 포트는 `127.0.0.1:8000`에만 bind합니다. 인터넷에는 Nginx의 80/443만 노출합니다.
+- MCP와 Collector는 서로 다른 immutable Docker image tag로 배포합니다.
+- GitHub Actions는 Python 테스트, Ruff, Next.js lint/build 통과 후 이미지를 배포하며 health check 실패 시 이전 MCP image로 rollback합니다.
+- cron은 10분마다 Collector를 one-shot container로 실행하고 `flock`으로 중복 실행을 막습니다.
+
+AWS 콘솔 설정, Secret 목록, EC2 초기 준비, 제출 캡처 기준은 [`infra/README.md`](infra/README.md)에 정리했습니다.
+
+### 14-2. 로컬 통합 실행
+
+```bash
+docker compose -f compose.local.yml up --build -d db mcp
+curl http://localhost:8000/health
+docker compose -f compose.local.yml --profile collect run --rm collector
+```
+
+로컬 Compose 비밀번호와 Token은 로컬 개발 전용 고정값입니다. 운영에는 `.env.example`을 기준으로 GitHub Secrets, EC2의 권한 제한 파일, Vercel Server-side 환경변수를 사용합니다.

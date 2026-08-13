@@ -1,15 +1,20 @@
-# 1. Base 이미지 선택 (파이썬 3.10)
-FROM python:3.10-slim
+FROM python:3.13-slim
 
-# 2. 작업 디렉토리 설정
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
 WORKDIR /app
 
-# 3. Collector 의존성 파일 복사 및 설치
-COPY collector/requirements.txt ./
-RUN pip install --no-cache-dir -r requirements.txt
+COPY mcp_server/requirements.txt ./mcp_server/requirements.txt
+RUN pip install --no-cache-dir -r mcp_server/requirements.txt \
+    && useradd --create-home --uid 10001 appuser
 
-# 4. Collector 소스 코드 복사
-COPY collector/ ./collector/
+COPY --chown=appuser:appuser mcp_server/ ./mcp_server/
 
-# 5. 수집기 실행 명령
-CMD ["python", "collector/main.py"]
+USER appuser
+EXPOSE 8000
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"
+
+CMD ["python", "-m", "mcp_server.server"]

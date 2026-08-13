@@ -1,0 +1,1 @@
+"""Upbit price collector package."""

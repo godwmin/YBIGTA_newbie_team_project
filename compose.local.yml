@@ -1,0 +1,52 @@
+services:
+  db:
+    image: mysql:8.4
+    environment:
+      MYSQL_ROOT_PASSWORD: local-root-password
+    volumes:
+      - crypto-db:/var/lib/mysql
+      - ./mcp_server/database/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+      - ./mcp_server/database/local_users.sql:/docker-entrypoint-initdb.d/02-users.sql:ro
+      - ./mcp_server/database/seed.sql:/docker-entrypoint-initdb.d/03-seed.sql:ro
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-plocal-root-password"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  mcp:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      DB_HOST: db
+      DB_PORT: 3306
+      DB_NAME: crypto_db
+      MCP_DB_USER: mcp_user
+      MCP_DB_PASSWORD: local-mcp-password
+      MCP_AUTH_TOKEN: local-mcp-token-change-me
+      MCP_HOST: 0.0.0.0
+      MCP_PORT: 8000
+    ports:
+      - "127.0.0.1:8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+
+  collector:
+    profiles: ["collect"]
+    build:
+      context: .
+      dockerfile: collector/Dockerfile
+    environment:
+      DB_HOST: db
+      DB_PORT: 3306
+      DB_NAME: crypto_db
+      COLLECTOR_DB_USER: collector_user
+      COLLECTOR_DB_PASSWORD: local-collector-password
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  crypto-db:

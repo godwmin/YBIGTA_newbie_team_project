@@ -1,62 +1,78 @@
-import { NextRequest, NextResponse } from 'next/server';
+import { openai } from '@ai-sdk/openai';
+import { generateText, stepCountIs, type ModelMessage } from 'ai';
+import { NextResponse } from 'next/server';
 
-// MCP 서버 호출 함수 (Next.js 서버에서만 실행되므로 비밀키가 안전함)
-async function callMcpTool(toolName: string, args: Record<string, any>) {
-  const mcpUrl = process.env.MCP_SERVER_URL || 'http://localhost:8000';
-  const mcpToken = process.env.MCP_AUTH_TOKEN || '';
+import { createMcpToolSet } from '@/lib/mcp-client';
 
-  try {
-    const response = await fetch(`${mcpUrl}/tools/${toolName}`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${mcpToken}`, // Bearer 토큰 인증
-      },
-      body: JSON.stringify(args),
-    });
+export const runtime = 'nodejs';
+export const maxDuration = 60;
 
-    if (!response.ok) {
-      throw new Error(`MCP Server Error: ${response.statusText}`);
-    }
+type IncomingMessage = { role: 'user' | 'assistant'; content: string };
 
-    return await response.json();
-  } catch (error) {
-    console.error(`MCP Tool Call Failed (${toolName}):`, error);
-    return { error: 'MCP Server 통신 실패' };
+class InputError extends Error {}
+
+function parseMessages(value: unknown): ModelMessage[] {
+  if (!Array.isArray(value)) throw new InputError('messages must be an array');
+  const configuredMax = Number(process.env.MAX_CHAT_MESSAGES ?? '20');
+  const maxMessages = Number.isInteger(configuredMax) && configuredMax > 0
+    ? Math.min(configuredMax, 100)
+    : 20;
+  if (value.length === 0 || value.length > maxMessages) {
+    throw new InputError(`messages must contain 1-${maxMessages} items`);
   }
+
+  return value.map((item): ModelMessage => {
+    const message = item as Partial<IncomingMessage>;
+    if (
+      (message.role !== 'user' && message.role !== 'assistant') ||
+      typeof message.content !== 'string' ||
+      message.content.trim().length === 0 ||
+      message.content.length > 4000
+    ) {
+      throw new InputError('invalid chat message');
+    }
+    return { role: message.role, content: message.content.trim() };
+  });
 }
 
-export async function POST(req: NextRequest) {
+function publicError(error: unknown): string {
+  const message = error instanceof Error ? error.message : '';
+  if (message.includes('OPENAI_API_KEY')) return 'OpenAI API Key가 설정되지 않았습니다.';
+  if (message.includes('MCP_')) return 'MCP 서버 환경변수 또는 연결 상태를 확인해주세요.';
+  return '답변 생성 중 서버 오류가 발생했습니다.';
+}
+
+export async function POST(request: Request) {
+  let mcpClient: Awaited<ReturnType<typeof createMcpToolSet>>['client'] | undefined;
   try {
-    const { messages } = await req.json();
-    const lastUserMessage = messages[messages.length - 1]?.content || '';
+    const body = (await request.json()) as { messages?: unknown };
+    const messages = parseMessages(body.messages);
+    const mcp = await createMcpToolSet();
+    mcpClient = mcp.client;
 
-    // 1. 단순 예시 라우팅 (실제 LLM Tool Call 또는 규칙 기반 매핑)
-    // 질문 분석 후 알맞은 MCP Tool을 호출합니다.
-    let mcpResult = null;
-    let toolNameCalled = '';
+    const result = await generateText({
+      model: openai(process.env.OPENAI_MODEL ?? 'gpt-5.4-mini'),
+      system:
+        '당신은 한국어 가상자산 데이터 분석 Agent입니다. 가격 관련 사실은 반드시 제공된 MCP Tool로 조회하고, 조회 시각과 변동률 단위를 명확히 설명하세요. 데이터에 없는 미래 가격을 단정하거나 투자 권유를 하지 마세요.',
+      messages,
+      tools: mcp.tools,
+      stopWhen: stepCountIs(5),
+      timeout: 50_000,
+    });
 
-    if (lastUserMessage.includes('최근') || lastUserMessage.includes('가격') || lastUserMessage.includes('시세')) {
-      toolNameCalled = 'get_latest_price';
-      mcpResult = await callMcpTool('get_latest_price', { symbol: 'KRW-BTC' });
-    } else if (lastUserMessage.includes('상승') || lastUserMessage.includes('높은') || lastUserMessage.includes('분석')) {
-      toolNameCalled = 'get_top_gainers';
-      mcpResult = await callMcpTool('get_top_gainers', { limit: 3 });
-    } else {
-      toolNameCalled = 'get_price_history';
-      mcpResult = await callMcpTool('get_price_history', { symbol: 'KRW-BTC', hours: 24 });
-    }
-
-    // 2. MCP에서 가져온 데이터 기반으로 최종 응답 반환
-    const aiResponse = `[호출된 MCP Tool: ${toolNameCalled}]\n\n조회 결과 데이터:\n${JSON.stringify(mcpResult, null, 2)}`;
-
+    const toolCalls = result.steps.flatMap((step) =>
+      step.toolCalls.map((call) => call.toolName),
+    );
     return NextResponse.json({
       role: 'assistant',
-      content: aiResponse,
-      toolCalled: toolNameCalled,
+      content: result.text || '조회 결과를 바탕으로 답변을 만들지 못했습니다.',
+      toolCalls,
     });
   } catch (error) {
-    console.error('Chat API Error:', error);
-    return NextResponse.json({ error: '서버 에러가 발생했습니다.' }, { status: 500 });
+    console.error('Chat route failed:', error);
+    const status = error instanceof SyntaxError || error instanceof InputError ? 400 : 500;
+    return NextResponse.json({ error: publicError(error) }, { status });
+  } finally {
+    await mcpClient?.close().catch((error) => console.error('MCP close failed:', error));
   }
 }
