@@ -1,0 +1,33 @@
+# /etc/systemd/system/collector.timer
+#
+# cron 대신 systemd timer를 쓰고 싶을 때의 대안.
+# cron보다 나은 점: 재부팅 중 놓친 실행을 Persistent=true로 따라잡고,
+#                   journalctl로 실행 이력이 구조적으로 남는다.
+#
+# 설치:
+#   sudo cp infra/scheduler/collector.{service,timer} /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now collector.timer
+#
+# 확인 (캡처 대상):
+#   systemctl list-timers collector.timer
+#   journalctl -u collector.service --since "2 hours ago"
+
+[Unit]
+Description=YBIGTA collector 주기 실행 타이머
+
+[Timer]
+# 부팅 2분 뒤 첫 실행, 이후 30분 간격
+OnBootSec=2min
+OnUnitActiveSec=30min
+
+# 여러 인스턴스가 동시에 외부 API를 때리지 않도록 최대 60초 지터
+RandomizedDelaySec=60s
+
+# 꺼져 있던 동안 놓친 실행을 부팅 후 따라잡는다
+Persistent=true
+
+Unit=collector.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,16 @@
+# cp terraform.tfvars.example terraform.tfvars 후 값을 채우세요.
+# terraform.tfvars 는 .gitignore 대상입니다. 절대 커밋하지 마세요.
+
+project_name = "ybigta-agent"
+region       = "ap-northeast-2"
+
+# curl -s https://checkip.amazonaws.com 결과 + "/32"
+my_ip_cidr = "1.2.3.4/32"
+
+# AWS 콘솔 > EC2 > Key Pairs 에 이미 존재하는 키 이름 (확장자 .pem 제외)
+ec2_key_name = "ybigta-key"
+
+# RDS 마스터 비밀번호.
+# 파일에 적기 싫으면 이 줄을 지우고 환경변수로 주입:
+#   export TF_VAR_db_master_password='...'
+db_master_password = "CHANGE_ME_strong_password"
