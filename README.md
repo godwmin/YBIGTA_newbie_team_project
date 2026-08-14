@@ -948,31 +948,168 @@ Vercel Project Settings에는 `OPENAI_API_KEY`, `OPENAI_MODEL`, `MCP_SERVER_URL`
 
 ```mermaid
 flowchart LR
-    Browser[Browser] --> Vercel[Vercel Next.js]
-    Vercel -->|HTTPS + Bearer| Nginx
-    subgraph AWS_VPC[AWS VPC]
-      subgraph Public_Subnet[Public Subnet]
-        Nginx[Nginx :80/443] -->|localhost| MCP[MCP :8000]
-        Cron[cron / 10분] --> Collector[Collector]
+    Browser[Browser] --> Vercel[Vercel Next.js<br/>Server Route Handler]
+    Vercel -->|"POST /mcp + Bearer"| Nginx
+
+    subgraph AWS_VPC["AWS VPC (10.0.0.0/16) · ap-northeast-2"]
+      subgraph Public["Public Subnet (2 AZ)"]
+        Nginx["Nginx :80/:443<br/>reverse proxy"]
+        MCP["MCP Server<br/>127.0.0.1:8000"]
+        Collector["Collector<br/>one-shot container"]
+        Cron["cron */30"]
+        Nginx -->|"proxy_pass 127.0.0.1:8000"| MCP
+        Cron --> Collector
       end
-      subgraph Private_Subnet[Private Subnet]
-        MCP -->|SELECT / mcp_user| RDS[(RDS MySQL)]
-        Collector -->|INSERT / collector_user| RDS
+      subgraph Private["Private Subnet (2 AZ) · 인터넷 경로 없음"]
+        RDS[("RDS MySQL 8.0<br/>ybigta-agent-rds")]
       end
+      MCP -->|"SELECT / mcp_user"| RDS
+      Collector -->|"INSERT / collector_user"| RDS
     end
-    Upbit[Upbit Public API] --> Collector
+
+    Upbit["Upbit 공개 API<br/>인증 불필요"] --> Collector
 ```
 
-- EC2는 Public Subnet, RDS는 Private Subnet의 DB Subnet Group에 둡니다.
-- RDS Public Access는 `OFF`이고 `rds-sg:3306` inbound source는 `mcp-sg`만 허용합니다.
-- MCP 컨테이너 포트는 `127.0.0.1:8000`에만 bind합니다. 인터넷에는 Nginx의 80/443만 노출합니다.
-- MCP와 Collector는 서로 다른 immutable Docker image tag로 배포합니다.
-- GitHub Actions는 Python 테스트, Ruff, Next.js lint/build 통과 후 이미지를 배포하며 health check 실패 시 이전 MCP image로 rollback합니다.
-- cron은 10분마다 Collector를 one-shot container로 실행하고 `flock`으로 중복 실행을 막습니다.
+### 14-2. VPC · 보안 설계
 
-AWS 콘솔 설정, Secret 목록, EC2 초기 준비, 제출 캡처 기준은 [`infra/README.md`](infra/README.md)에 정리했습니다.
+**서브넷 분리**
 
-### 14-2. 로컬 통합 실행
+| 구성 | 위치 | 근거 |
+|---|---|---|
+| EC2 (Nginx · MCP · Collector) | Public Subnet | 인터넷에서 접근이 필요한 유일한 지점 |
+| RDS MySQL | Private Subnet (DB Subnet Group, 2 AZ) | 인터넷 경로 자체를 제거 |
+
+- Private Subnet 라우팅 테이블에 **IGW·NAT 경로가 없습니다.** RDS는 나갈 길도 들어올 길도 없습니다.
+- NAT Gateway는 **의도적으로 만들지 않았습니다.** 시간당 과금이 발생하는데, RDS가 아웃바운드 인터넷을 쓸 일이 없습니다.
+
+**Security Group — IP가 아니라 SG를 참조합니다**
+
+| SG | Inbound | Source |
+|---|---|---|
+| `mcp-sg` (`sg-04b5ab09e3c767d33`) | 80, 443 | `0.0.0.0/0` |
+| | 22 | **관리자 IP/32** (전체 개방 금지) |
+| `rds-sg` (`sg-0df83a7bc7a91e2ba`) | 3306 | **`mcp-sg`** (CIDR 아님) |
+
+RDS 인바운드를 CIDR이 아닌 **보안 그룹 참조**로 지정했습니다. EC2의 공인 IP가 바뀌어도 규칙을 고칠 필요가 없고,
+"그 SG에 속한 인스턴스만"이라는 조건이라 IP 대역보다 범위가 좁습니다.
+
+**내부 포트 비노출 (2중 차단)**
+
+1. `mcp-sg`에 **8000번 규칙이 아예 없습니다.**
+2. 컨테이너를 `-p 127.0.0.1:8000:8000` 으로 **루프백에만 바인딩**했습니다.
+
+2번이 중요합니다. Docker는 포트 게시 시 iptables DNAT 규칙을 직접 추가해서 **Security Group을 우회**할 수 있습니다.
+`0.0.0.0`에 바인딩하면 SG에서 막았다고 생각해도 열릴 수 있어, 바인딩 주소 자체를 루프백으로 제한했습니다.
+
+**그 외**
+
+- RDS `publicly_accessible = false`, 저장 시 암호화(`storage_encrypted = true`)
+- EC2 IMDSv2 강제 (`http_tokens = required`) — SSRF로 인스턴스 자격증명이 유출되는 경로 차단
+- Nginx `server_tokens off`, `limit_req` 20r/s (burst 40)
+- DB 계정 권한 분리 — 아래 14-4 참조
+
+### 14-3. 배포 방식
+
+**Terraform (IaC)** — `infra/terraform/` 에서 VPC·Subnet·IGW·Route Table·SG·RDS·EC2 등 **24개 리소스**를 관리합니다.
+`terraform.tfvars`(비밀번호 포함)와 `terraform.tfstate`는 `.gitignore` 처리했습니다.
+
+```bash
+cd infra/terraform
+cp terraform.tfvars.example terraform.tfvars   # 값 입력
+terraform init && terraform plan && terraform apply
+```
+
+**애플리케이션** — Docker 레지스트리를 쓰지 않고 **EC2에서 소스를 직접 빌드**해 배포했습니다.
+
+```bash
+# MCP Server
+docker build -t ybigta/mcp-server:local -f Dockerfile .
+docker run -d --name mcp-server --restart unless-stopped \
+  -p 127.0.0.1:8000:8000 --env-file /opt/mcp/mcp.env ybigta/mcp-server:local
+
+# Collector (cron이 30분마다 호출)
+docker build -t ybigta/collector:local -f collector/Dockerfile .
+```
+
+> `.github/workflows/deploy.yaml` 에 GitHub Actions 파이프라인이 작성돼 있으나 **이번 제출에서는 실행하지 않았습니다.**
+> 저장소 Secrets의 `EC2_HOST`·`EC2_SSH_KEY` 가 이전 인스턴스 값이라, 현재 EC2로 배포하려면 갱신이 필요합니다.
+> 지금 배포본은 위 수동 절차로 올라가 있습니다.
+
+**자동 수집 스케줄러 (cron)**
+
+```cron
+*/30 * * * * /opt/mcp/run_collector.sh >> /var/log/ybigta/cron.log 2>&1
+0 4 * * *    /usr/bin/docker image prune -af --filter "until=168h"
+```
+
+`run_collector.sh` 는 `flock`으로 중복 실행을 막고, 시작·종료 시각과 종료 코드를 `/var/log/ybigta/collector.log` 에 남깁니다.
+
+### 14-4. DB 계정 권한 분리
+
+`mcp_server/database/grants.sql` 기준으로 **테이블 단위** 최소 권한만 부여했습니다.
+
+```sql
+GRANT INSERT ON crypto_db.coin_prices TO 'collector_user'@'%';   -- 수집기: 추가만
+GRANT SELECT ON crypto_db.coin_prices TO 'mcp_user'@'%';         -- MCP: 조회만
+```
+
+실제로 차단되는지 확인했습니다.
+
+```
+mcp_user       INSERT → ERROR 1142 (42000): INSERT command denied to user 'mcp_user'@'10.0.1.38'
+collector_user DELETE → ERROR 1142 (42000): DELETE command denied to user 'collector_user'@'10.0.1.38'
+```
+
+### 14-5. 배포 검증 결과
+
+| 항목 | 결과 |
+|---|---|
+| RDS `PubliclyAccessible` | `false` |
+| RDS 위치 | Private Subnet (`subnet-09279b71…`, `subnet-05bcba76…`) |
+| `rds-sg` 인바운드 | 3306 ← `sg-04b5ab09e3c767d33` (mcp-sg) **1건뿐** |
+| `mcp-sg` 인바운드 | 80 / 443 / 22 — **8000 없음** |
+| 외부 → `43.201.182.119:8000` | **차단됨** |
+| 외부 → `43.201.182.119/health` | `{"status":"ok"}` |
+| 외부 → `POST /mcp` (토큰 없음) | `401` |
+| 외부 → `POST /mcp` (Bearer) | `200` — `get_latest_price`·`get_top_gainers`·`get_price_history` |
+| 외부 → RDS `3306` | **차단됨** |
+
+**배포 스펙**
+
+```
+VPC     vpc-065cc01a8586e54a0  (10.0.0.0/16)
+EC2     t3.micro · Ubuntu 24.04 LTS · ap-northeast-2a · IMDSv2 required
+RDS     db.t3.micro · MySQL 8.0.46 · 20GB · 암호화 O · ap-northeast-2c
+NAT GW  미생성 (비용)
+```
+
+### 14-6. 제출 캡처
+
+**RDS Public Access OFF + Private Subnet 배치**
+
+![rds_private](aws/rds_private.png)
+
+`퍼블릭 액세스 가능: 아니요`, DB Subnet Group, VPC를 함께 확인할 수 있습니다.
+
+**RDS 보안 그룹 — 인바운드를 mcp-sg로 제한**
+
+![security_group](aws/security_group.png)
+
+인바운드 규칙이 1개이며 소스가 CIDR이 아닌 `sg-04b5ab09e3c767d33`(mcp-sg)입니다.
+
+**내부 포트 비노출 (Nginx 리버스 프록시)**
+
+![nginx_proxy](aws/nginx_proxy.png)
+
+`mcp-sg` 인바운드가 80/443/22 세 개뿐이고 **8000번이 없습니다.**
+
+**자동 수집 동작**
+
+![data_update](aws/data_update.png)
+
+수집 전/후 행 수 변화와 cron 등록 상태, 최근 자동 실행 이력을 확인할 수 있습니다.
+
+### 14-7. 로컬 통합 실행
 
 ```bash
 docker compose -f compose.local.yml up --build -d db mcp
@@ -980,4 +1117,14 @@ curl http://localhost:8000/health
 docker compose -f compose.local.yml --profile collect run --rm collector
 ```
 
-로컬 Compose 비밀번호와 Token은 로컬 개발 전용 고정값입니다. 운영에는 `.env.example`을 기준으로 GitHub Secrets, EC2의 권한 제한 파일, Vercel Server-side 환경변수를 사용합니다.
+로컬 Compose의 비밀번호와 Token은 로컬 개발 전용 고정값입니다.
+운영에서는 `.env.example` 기준으로 EC2의 권한 제한 파일(`/opt/mcp/*.env`, `chmod 600`)과
+Vercel Server-side 환경변수를 사용하며, 실제 값은 저장소에 올리지 않습니다.
+
+AWS 콘솔 설정, Secret 목록, EC2 초기 준비, 캡처 기준은 [`infra/README.md`](infra/README.md),
+아키텍처 상세는 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) 에 정리했습니다.
+
+---
+
+
+
