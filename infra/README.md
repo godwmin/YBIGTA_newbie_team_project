@@ -40,7 +40,11 @@ Docker, Nginx, `flock`을 설치하고 EC2 사용자에게 Docker 실행 권한�
 
 ## GitHub Actions Secrets
 
-`DOCKERHUB_USERNAME`, `DOCKERHUB_TOKEN`, `DOCKERHUB_REPOSITORY`, `EC2_HOST`, `EC2_USERNAME`, `EC2_SSH_KEY`, `EC2_KNOWN_HOSTS`, `DB_HOST`, `DB_PORT`, `DB_NAME`, `MCP_DB_USER`, `MCP_DB_PASSWORD`, `COLLECTOR_DB_USER`, `COLLECTOR_DB_PASSWORD`, `MCP_AUTH_TOKEN`이 필요합니다. `EC2_KNOWN_HOSTS`에는 신뢰할 수 있는 경로에서 확인한 EC2 SSH host key 한 줄을 넣어 배포 중 MITM을 막습니다.
+이전 과제의 저장소 Secret과 충돌하지 않도록 이번 Agent 과제용 Secret에는 `AGENT_` 접두사를 사용합니다.
+
+`AGENT_DOCKERHUB_USERNAME`, `AGENT_DOCKERHUB_TOKEN`, `AGENT_DOCKERHUB_REPOSITORY`, `AGENT_EC2_HOST`, `AGENT_EC2_USERNAME`, `AGENT_EC2_SSH_KEY`, `AGENT_EC2_KNOWN_HOSTS`, `AGENT_DB_HOST`, `AGENT_DB_PORT`, `AGENT_DB_NAME`, `AGENT_MCP_DB_USER`, `AGENT_MCP_DB_PASSWORD`, `AGENT_COLLECTOR_DB_USER`, `AGENT_COLLECTOR_DB_PASSWORD`, `AGENT_MCP_AUTH_TOKEN`이 필요합니다. `AGENT_EC2_KNOWN_HOSTS`에는 신뢰할 수 있는 경로에서 확인한 EC2 SSH host key를 넣어 배포 중 MITM을 막습니다.
+
+이 접두사는 GitHub Repository Secret 이름에만 사용합니다. EC2에 생성되는 런타임 `.env`와 Vercel 환경변수는 기존의 `DB_HOST`, `MCP_AUTH_TOKEN`, `MCP_SERVER_URL` 등의 이름을 그대로 사용합니다.
 
 ## 제출 캡처
 
