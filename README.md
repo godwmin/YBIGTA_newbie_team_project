@@ -1031,9 +1031,8 @@ docker run -d --name mcp-server --restart unless-stopped \
 docker build -t ybigta/collector:local -f collector/Dockerfile .
 ```
 
-> `.github/workflows/deploy.yaml` 에 GitHub Actions 파이프라인이 작성돼 있으나 **이번 제출에서는 실행하지 않았습니다.**
-> 저장소 Secrets의 `EC2_HOST`·`EC2_SSH_KEY` 가 이전 인스턴스 값이라, 현재 EC2로 배포하려면 갱신이 필요합니다.
-> 지금 배포본은 위 수동 절차로 올라가 있습니다.
+> `.github/workflows/deploy.yaml`의 GitHub Actions 파이프라인은 이전 과제 Secret과 분리된 `AGENT_*` Repository Secrets를 사용합니다.
+> `AGENT_EC2_HOST`·`AGENT_EC2_SSH_KEY` 등 이번 과제용 Secret을 등록한 뒤 `main`에 push하면 현재 EC2로 자동 배포할 수 있습니다.
 
 **자동 수집 스케줄러 (cron)**
 
@@ -1125,6 +1124,4 @@ AWS 콘솔 설정, Secret 목록, EC2 초기 준비, 캡처 기준은 [`infra/RE
 아키텍처 상세는 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) 에 정리했습니다.
 
 ---
-
-
 

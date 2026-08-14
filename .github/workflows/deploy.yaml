@@ -46,8 +46,8 @@ jobs:
       - uses: docker/setup-buildx-action@v4
       - uses: docker/login-action@v4
         with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          username: ${{ secrets.AGENT_DOCKERHUB_USERNAME }}
+          password: ${{ secrets.AGENT_DOCKERHUB_TOKEN }}
       - name: Build and push MCP server
         uses: docker/build-push-action@v7
         with:
@@ -55,8 +55,8 @@ jobs:
           file: ./Dockerfile
           push: true
           tags: |
-            ${{ secrets.DOCKERHUB_REPOSITORY }}:mcp-${{ github.sha }}
-            ${{ secrets.DOCKERHUB_REPOSITORY }}:mcp-latest
+            ${{ secrets.AGENT_DOCKERHUB_REPOSITORY }}:mcp-${{ github.sha }}
+            ${{ secrets.AGENT_DOCKERHUB_REPOSITORY }}:mcp-latest
           cache-from: type=gha,scope=mcp
           cache-to: type=gha,mode=max,scope=mcp
       - name: Build and push Collector
@@ -66,8 +66,8 @@ jobs:
           file: ./collector/Dockerfile
           push: true
           tags: |
-            ${{ secrets.DOCKERHUB_REPOSITORY }}:collector-${{ github.sha }}
-            ${{ secrets.DOCKERHUB_REPOSITORY }}:collector-latest
+            ${{ secrets.AGENT_DOCKERHUB_REPOSITORY }}:collector-${{ github.sha }}
+            ${{ secrets.AGENT_DOCKERHUB_REPOSITORY }}:collector-latest
           cache-from: type=gha,scope=collector
           cache-to: type=gha,mode=max,scope=collector
 
@@ -78,40 +78,40 @@ jobs:
       - uses: actions/checkout@v6
       - name: Validate deployment secrets
         env:
-          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
-          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
-          DOCKERHUB_REPOSITORY: ${{ secrets.DOCKERHUB_REPOSITORY }}
-          EC2_HOST: ${{ secrets.EC2_HOST }}
-          EC2_USERNAME: ${{ secrets.EC2_USERNAME }}
-          EC2_SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
-          EC2_KNOWN_HOSTS: ${{ secrets.EC2_KNOWN_HOSTS }}
-          DB_HOST: ${{ secrets.DB_HOST }}
-          DB_PORT: ${{ secrets.DB_PORT }}
-          DB_NAME: ${{ secrets.DB_NAME }}
-          MCP_DB_USER: ${{ secrets.MCP_DB_USER }}
-          MCP_DB_PASSWORD: ${{ secrets.MCP_DB_PASSWORD }}
-          COLLECTOR_DB_USER: ${{ secrets.COLLECTOR_DB_USER }}
-          COLLECTOR_DB_PASSWORD: ${{ secrets.COLLECTOR_DB_PASSWORD }}
-          MCP_AUTH_TOKEN: ${{ secrets.MCP_AUTH_TOKEN }}
+          DOCKERHUB_USERNAME: ${{ secrets.AGENT_DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.AGENT_DOCKERHUB_TOKEN }}
+          DOCKERHUB_REPOSITORY: ${{ secrets.AGENT_DOCKERHUB_REPOSITORY }}
+          EC2_HOST: ${{ secrets.AGENT_EC2_HOST }}
+          EC2_USERNAME: ${{ secrets.AGENT_EC2_USERNAME }}
+          EC2_SSH_KEY: ${{ secrets.AGENT_EC2_SSH_KEY }}
+          EC2_KNOWN_HOSTS: ${{ secrets.AGENT_EC2_KNOWN_HOSTS }}
+          DB_HOST: ${{ secrets.AGENT_DB_HOST }}
+          DB_PORT: ${{ secrets.AGENT_DB_PORT }}
+          DB_NAME: ${{ secrets.AGENT_DB_NAME }}
+          MCP_DB_USER: ${{ secrets.AGENT_MCP_DB_USER }}
+          MCP_DB_PASSWORD: ${{ secrets.AGENT_MCP_DB_PASSWORD }}
+          COLLECTOR_DB_USER: ${{ secrets.AGENT_COLLECTOR_DB_USER }}
+          COLLECTOR_DB_PASSWORD: ${{ secrets.AGENT_COLLECTOR_DB_PASSWORD }}
+          MCP_AUTH_TOKEN: ${{ secrets.AGENT_MCP_AUTH_TOKEN }}
         run: |
           set -euo pipefail
           required=(DOCKERHUB_USERNAME DOCKERHUB_TOKEN DOCKERHUB_REPOSITORY EC2_HOST EC2_USERNAME EC2_SSH_KEY EC2_KNOWN_HOSTS DB_HOST DB_PORT DB_NAME MCP_DB_USER MCP_DB_PASSWORD COLLECTOR_DB_USER COLLECTOR_DB_PASSWORD MCP_AUTH_TOKEN)
           for name in "${required[@]}"; do
-            test -n "${!name}" || { echo "Missing GitHub Secret: $name" >&2; exit 1; }
+            test -n "${!name}" || { echo "Missing GitHub Secret: AGENT_$name" >&2; exit 1; }
           done
       - name: Configure SSH and runtime files
         env:
-          EC2_HOST: ${{ secrets.EC2_HOST }}
-          EC2_SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
-          EC2_KNOWN_HOSTS: ${{ secrets.EC2_KNOWN_HOSTS }}
-          DB_HOST: ${{ secrets.DB_HOST }}
-          DB_PORT: ${{ secrets.DB_PORT }}
-          DB_NAME: ${{ secrets.DB_NAME }}
-          MCP_DB_USER: ${{ secrets.MCP_DB_USER }}
-          MCP_DB_PASSWORD: ${{ secrets.MCP_DB_PASSWORD }}
-          COLLECTOR_DB_USER: ${{ secrets.COLLECTOR_DB_USER }}
-          COLLECTOR_DB_PASSWORD: ${{ secrets.COLLECTOR_DB_PASSWORD }}
-          MCP_AUTH_TOKEN: ${{ secrets.MCP_AUTH_TOKEN }}
+          EC2_HOST: ${{ secrets.AGENT_EC2_HOST }}
+          EC2_SSH_KEY: ${{ secrets.AGENT_EC2_SSH_KEY }}
+          EC2_KNOWN_HOSTS: ${{ secrets.AGENT_EC2_KNOWN_HOSTS }}
+          DB_HOST: ${{ secrets.AGENT_DB_HOST }}
+          DB_PORT: ${{ secrets.AGENT_DB_PORT }}
+          DB_NAME: ${{ secrets.AGENT_DB_NAME }}
+          MCP_DB_USER: ${{ secrets.AGENT_MCP_DB_USER }}
+          MCP_DB_PASSWORD: ${{ secrets.AGENT_MCP_DB_PASSWORD }}
+          COLLECTOR_DB_USER: ${{ secrets.AGENT_COLLECTOR_DB_USER }}
+          COLLECTOR_DB_PASSWORD: ${{ secrets.AGENT_COLLECTOR_DB_PASSWORD }}
+          MCP_AUTH_TOKEN: ${{ secrets.AGENT_MCP_AUTH_TOKEN }}
         run: |
           set -euo pipefail
           install -m 700 -d "$HOME/.ssh"
@@ -124,8 +124,8 @@ jobs:
           printf 'DB_HOST=%s\nDB_PORT=%s\nDB_NAME=%s\nCOLLECTOR_DB_USER=%s\nCOLLECTOR_DB_PASSWORD=%s\n' "$DB_HOST" "$DB_PORT" "$DB_NAME" "$COLLECTOR_DB_USER" "$COLLECTOR_DB_PASSWORD" > "$RUNNER_TEMP/collector.env"
       - name: Copy deployment files
         env:
-          EC2_HOST: ${{ secrets.EC2_HOST }}
-          EC2_USERNAME: ${{ secrets.EC2_USERNAME }}
+          EC2_HOST: ${{ secrets.AGENT_EC2_HOST }}
+          EC2_USERNAME: ${{ secrets.AGENT_EC2_USERNAME }}
         run: |
           set -euo pipefail
           ssh -i "$HOME/.ssh/ec2_key" "$EC2_USERNAME@$EC2_HOST" 'install -m 700 -d "$HOME/ybigta"'
@@ -134,12 +134,12 @@ jobs:
           scp -i "$HOME/.ssh/ec2_key" infra/nginx/mcp.conf infra/cron/collector.cron infra/scripts/run-collector.sh "$EC2_USERNAME@$EC2_HOST:ybigta/"
       - name: Deploy immutable images
         env:
-          EC2_HOST: ${{ secrets.EC2_HOST }}
-          EC2_USERNAME: ${{ secrets.EC2_USERNAME }}
-          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
-          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
-          MCP_IMAGE: ${{ secrets.DOCKERHUB_REPOSITORY }}:mcp-${{ github.sha }}
-          COLLECTOR_IMAGE: ${{ secrets.DOCKERHUB_REPOSITORY }}:collector-${{ github.sha }}
+          EC2_HOST: ${{ secrets.AGENT_EC2_HOST }}
+          EC2_USERNAME: ${{ secrets.AGENT_EC2_USERNAME }}
+          DOCKERHUB_USERNAME: ${{ secrets.AGENT_DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.AGENT_DOCKERHUB_TOKEN }}
+          MCP_IMAGE: ${{ secrets.AGENT_DOCKERHUB_REPOSITORY }}:mcp-${{ github.sha }}
+          COLLECTOR_IMAGE: ${{ secrets.AGENT_DOCKERHUB_REPOSITORY }}:collector-${{ github.sha }}
         run: |
           set -euo pipefail
           printf '%s' "$DOCKERHUB_TOKEN" | ssh -i "$HOME/.ssh/ec2_key" "$EC2_USERNAME@$EC2_HOST" "docker login -u '$DOCKERHUB_USERNAME' --password-stdin"
